@@ -1,4 +1,4 @@
-const EMBEDDED_CSV_URL = './data/current.csv';
+const EMBEDDED_CSV_URL = './current.csv';
 
 const exifr = window.exifr;
 
@@ -3132,7 +3132,7 @@ window.toggleMeasure = function() {
 })();
 
 // ─── EMBEDDED CSV AUTO-LOAD ──────────────────────────────────────────────────
-// Loads data/current.csv on startup. To update the dataset, just overwrite
+// Loads current.csv on startup. To update the dataset, just overwrite
 // that file in the repo — the filename stays fixed, so no code changes needed.
 (function() {
   window.addEventListener('load', function() {

@@ -1723,7 +1723,7 @@ function runDnitLookupForLayer(parsedLayer) {
   matches.forEach(m => lookupDnitKm(m.latlng.lat, m.latlng.lng, m.name, m.layer));
 }
 
-function buildStyledGeoJsonOptions(dotColor) {
+function buildStyledGeoJsonOptions(dotColor, fields) {
   return {
     style: {
       color: dotColor,
@@ -1742,6 +1742,24 @@ function buildStyledGeoJsonOptions(dotColor) {
     }),
     onEachFeature: (feature, layer) => {
       const props = feature.properties || {};
+
+      if (fields && fields.length) {
+        // Fixed, ordered column list (used for the CSV dataset)
+        const name = props.Identificacao_OAE || props.codigo_SGO || '—';
+        const rows = fields
+          .filter(f => f.key !== 'Identificacao_OAE') // already shown as the title
+          .map(f => `<div class="popup-row">${f.label} <span>${props[f.key] || '—'}</span></div>`)
+          .join('');
+
+        layer.bindPopup(`
+          <div class="popup-content">
+            <div class="popup-name">${name}</div>
+            ${rows}
+          </div>
+        `, { maxHeight: 280 });
+        return;
+      }
+
       const name = props.name || props.Nome_Tipo_Trecho || props.Codigo_SNV || props.Codigo_BR || '—';
       const oae  = props.Identificacao_OAE ? `<div style="color:var(--accent);font-size:10px;margin-bottom:4px;">${props.Identificacao_OAE}</div>` : '';
       const uf   = props.Unidade_Federacao || props.sg_uf || '';
@@ -1834,8 +1852,6 @@ function csvRowsToGeoJSON(rows) {
     if (!isFinite(lat) || !isFinite(lon)) continue;
 
     const properties = { ...row, name: row.Identificacao_OAE || row.codigo_SGO || '—' };
-    delete properties.Latitude;
-    delete properties.Longitude;
 
     features.push({
       type: 'Feature',
@@ -1851,6 +1867,19 @@ async function loadEmbeddedCsv() {
   const id = 'kml_' + (++kmlIdCounter);
   const displayName = 'current.csv';
 
+  const POPUP_FIELDS = [
+    { key: 'codigo_SGO',        label: 'Código SGO' },
+    { key: 'Identificacao_OAE', label: 'Identificação OAE' },
+    { key: 'UF',                label: 'UF' },
+    { key: 'Rodovia_(BR)',      label: 'Rodovia (BR)' },
+    { key: 'km',                label: 'km' },
+    { key: 'Extensao_(m)',      label: 'Extensão (m)' },
+    { key: 'Largura_(m)',       label: 'Largura (m)' },
+    { key: 'Tipo_Estrutura',    label: 'Tipo Estrutura' },
+    { key: 'Latitude',          label: 'Latitude' },
+    { key: 'Longitude',         label: 'Longitude' }
+  ];
+
   try {
     const res = await fetch(EMBEDDED_CSV_URL);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1859,7 +1888,7 @@ async function loadEmbeddedCsv() {
     const rows = parseCSV(csvText);
     const geojson = csvRowsToGeoJSON(rows);
 
-    const parsed = L.geoJSON(geojson, buildStyledGeoJsonOptions(dotColor));
+    const parsed = L.geoJSON(geojson, buildStyledGeoJsonOptions(dotColor, POPUP_FIELDS));
     parsed.addTo(map);
 
     const bounds = parsed.getBounds();

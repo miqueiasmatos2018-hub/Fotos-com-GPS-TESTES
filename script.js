@@ -829,6 +829,7 @@ function addListItem(photo) {
     <div class="photo-info">
       <div class="photo-name">
         <span class="photo-name-text" title="${photo.name}">${photo.name}</span>
+        <button class="relocate-btn" title="Clicar no mapa para definir localização">🗺</button>
         <button class="rename-btn" title="Rename">✎</button>
       </div>
       <div class="photo-coords ${hasGPS ? 'has-gps' : 'no-gps'}">${coordText}</div>
@@ -853,6 +854,12 @@ function addListItem(photo) {
   item.querySelector('.rename-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     startRename(photo.id, item);
+  });
+
+  item.querySelector('.relocate-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    selectPhoto(photo.id);
+    startRelocateMode(photo.id);
   });
 
   // Double-click name text to rename
@@ -1061,6 +1068,8 @@ window.startRelocateMode = function(id) {
       if (btn) btn.classList.add('active');
     }
   }
+  const listItem = document.querySelector(`.photo-item[data-id="${id}"] .relocate-btn`);
+  if (listItem) listItem.classList.add('active');
 
   _pickingHandler = function(e) {
     const photo = photos.find(p => p.id == _pickingForId);
@@ -1132,6 +1141,7 @@ function cancelRelocateMode() {
 
   // Remove active class from all relocate buttons
   document.querySelectorAll('.popup-relocate-btn.active').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.relocate-btn.active').forEach(b => b.classList.remove('active'));
 
   _pickingForId = null;
 }

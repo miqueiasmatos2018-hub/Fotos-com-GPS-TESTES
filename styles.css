@@ -875,6 +875,25 @@
     line-height: 1;
   }
 
+  .relocate-btn {
+    flex-shrink: 0;
+    opacity: 0.45;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: 3px;
+    transition: all 0.15s;
+    line-height: 1;
+  }
+
+  .photo-item:hover .relocate-btn { opacity: 1; }
+  .photo-item.active .relocate-btn { opacity: 1; border-color: rgba(232,255,77,0.3); color: var(--accent); }
+  .relocate-btn:hover { color: var(--accent); background: rgba(232,255,77,0.12); border-color: var(--accent); opacity: 1; }
+  .relocate-btn.active { color: #000; background: var(--accent); border-color: var(--accent); opacity: 1; }
+
   .photo-item:hover .rename-btn { opacity: 1; }
   .photo-item.active .rename-btn { opacity: 1; border-color: rgba(232,255,77,0.3); color: var(--accent); }
   .rename-btn:hover { color: var(--accent); background: rgba(232,255,77,0.12); border-color: var(--accent); opacity: 1; }

@@ -1851,7 +1851,10 @@ function csvRowsToGeoJSON(rows) {
     const lon = parseFloat(String(row.Longitude).replace(',', '.'));
     if (!isFinite(lat) || !isFinite(lon)) continue;
 
-    const properties = { ...row, name: row.Identificacao_OAE || row.codigo_SGO || '—' };
+    const sgoRaw = (row.codigo_SGO || '').trim();
+    const sgoPadded = /^\d+$/.test(sgoRaw) ? sgoRaw.padStart(6, '0') : sgoRaw;
+
+    const properties = { ...row, codigo_SGO: sgoPadded, name: row.Identificacao_OAE || sgoPadded || '—' };
 
     features.push({
       type: 'Feature',
@@ -2541,11 +2544,12 @@ window.closeMpAlert = function(e) {
           const props = sl.feature?.properties || sl.options?.properties || {};
           const fname = props.name || props.Nome_Tipo_Trecho || props.Codigo_SNV || props.Codigo_BR || '';
           const oae   = props.Identificacao_OAE || '';
-          if (!fname && !oae) return;
-          const searchText = [fname, oae].filter(Boolean).join(' · ');
+          const sgo   = props.codigo_SGO || '';
+          if (!fname && !oae && !sgo) return;
+          const searchText = [fname, oae, sgo].filter(Boolean).join(' · ');
           const latlng = sl.getLatLng?.() || sl.getBounds?.()?.getCenter?.();
           if (!latlng) return;
-          features.push({ name: fname || oae, oae, searchText, props, latlng, layer: sl, fileName });
+          features.push({ name: fname || oae, oae, sgo, searchText, props, latlng, layer: sl, fileName });
         });
       });
     });
@@ -2760,7 +2764,7 @@ function removeCustomMarker(idx) {
       html += '<div class="kml-search-empty">Nenhum resultado encontrado</div>';
     } else {
       html += kmlMatches.map((f, i) => {
-        const meta = [f.props.sg_uf || f.props.Unidade_Federacao, f.fileName]
+        const meta = [f.props.sg_uf || f.props.Unidade_Federacao, f.sgo ? `SGO ${f.sgo}` : '', f.fileName]
           .filter(Boolean).join(' · ');
         const oaeHtml = f.oae ? `<div class="kml-result-meta" style="color:var(--accent);opacity:0.8;">${highlight(f.oae, q)}</div>` : '';
         return `<div class="kml-search-result-item" data-idx="${i}">

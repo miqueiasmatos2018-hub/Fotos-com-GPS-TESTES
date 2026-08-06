@@ -455,9 +455,6 @@ const detailRows   = document.getElementById('detailRows');
 const _elStatTotal = document.getElementById('statTotal');
 const _elStatGPS   = document.getElementById('statGPS');
 const _elStatNoGPS = document.getElementById('statNoGPS');
-const _elMetaEmpty = document.getElementById('metaTabEmpty');
-const _elMetaWrap  = document.getElementById('metaBulkWrap');
-const _elMetaList  = document.getElementById('metaPhotoList');
 const emptyState = document.getElementById('emptyState');
 const progressFill = document.getElementById('progressFill');
 
@@ -1758,7 +1755,7 @@ function buildStyledGeoJsonOptions(dotColor, fields) {
         const name = props.Identificacao_OAE || props.codigo_SGO || '—';
         const rows = fields
           .filter(f => f.key !== 'Identificacao_OAE') // already shown as the title
-          .map(f => `<div class="popup-row">${f.label} <span>${props[f.key] || '—'}</span></div>`)
+          .map(f => `<div class="popup-row">${f.label}: <span>${props[f.key] || '—'}</span></div>`)
           .join('');
 
         layer.bindPopup(`
@@ -1778,7 +1775,7 @@ function buildStyledGeoJsonOptions(dotColor, fields) {
       const rows = Object.entries(props)
         .filter(([k, v]) => v && k !== 'description' && k !== 'styleUrl')
         .slice(0, 10)
-        .map(([k, v]) => `<div class="popup-row">${k} <span>${v}</span></div>`)
+        .map(([k, v]) => `<div class="popup-row">${k}: <span>${v}</span></div>`)
         .join('');
 
       // LD_INICIO / LD_INICIO_OAE points get an extra row that's filled in
@@ -1787,14 +1784,14 @@ function buildStyledGeoJsonOptions(dotColor, fields) {
       let dnitRow = '';
       if (isLdInicio) {
         layer._dnitRowId = 'dnitkm-' + (++_dnitRowSeq);
-        dnitRow = `<div class="popup-row dnit-km-row" id="${layer._dnitRowId}">DNIT km <span>consultando…</span></div>`;
+        dnitRow = `<div class="popup-row dnit-km-row" id="${layer._dnitRowId}">DNIT km: <span>consultando…</span></div>`;
       }
 
       layer.bindPopup(`
         <div class="popup-content">
           <div class="popup-name">${name}${uf ? ' · ' + uf : ''}</div>
           ${oae}
-          ${km ? `<div class="popup-row">Extensão <span>${km}</span></div>` : ''}
+          ${km ? `<div class="popup-row">Extensão: <span>${km}</span></div>` : ''}
           ${rows}
           ${dnitRow}
         </div>
@@ -2022,7 +2019,7 @@ window.switchTab = function(tab) {
   if (tab !== 'pontos' && typeof _pontoPickingHandler !== 'undefined' && _pontoPickingHandler) {
     window.togglePontoPicking();
   }
-  ['photos','meta','pontos'].forEach(t => {
+  ['photos','pontos'].forEach(t => {
     const btn = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
     const content = document.getElementById('tabContent' + t.charAt(0).toUpperCase() + t.slice(1));
     if (btn)     btn.classList.toggle('active',     t === tab);
@@ -2031,88 +2028,9 @@ window.switchTab = function(tab) {
 };
 
 function refreshMetaTab() {
-  const empty = _elMetaEmpty;
-  const wrap  = _elMetaWrap;
-  const list  = _elMetaList;
-  if (!list) return;
-  if (!photos || !photos.length) {
-    if (empty) empty.style.display = '';
-    if (wrap)  wrap.style.display  = 'none';
-    return;
-  }
-  if (empty) empty.style.display = 'none';
-  if (wrap)  wrap.style.display  = 'flex';
-
-  const openIds = new Set(
-    [...list.querySelectorAll('.meta-photo-header.open')].map(el => el.dataset.id)
-  );
-
-  list.innerHTML = photos.map(photo => {
-    const exif   = photo.exif || {};
-    const isOpen = openIds.has(String(photo.id));
-    const fields = [
-      { key: 'File Name',    val: photo.name,           readonly: true },
-      { key: 'Date Taken',   val: exif.DateTimeOriginal ? formatDate(exif.DateTimeOriginal) : '', metaKey: 'DateTimeOriginal' },
-      { key: 'Camera Make',  val: exif.Make   || '',    metaKey: 'Make' },
-      { key: 'Camera Model', val: exif.Model  || '',    metaKey: 'Model' },
-      { key: 'Lens',         val: exif.LensModel || '', metaKey: 'LensModel' },
-      { key: 'Focal Length', val: exif.FocalLength  != null ? String(exif.FocalLength)  : '', metaKey: 'FocalLength' },
-      { key: 'Aperture f/',  val: exif.FNumber      != null ? String(exif.FNumber)      : '', metaKey: 'FNumber' },
-      { key: 'ISO',          val: exif.ISO          != null ? String(exif.ISO)          : '', metaKey: 'ISO' },
-      { key: 'GPS Lat',      val: photo.lat != null ? photo.lat.toFixed(8) : '',              metaKey: 'lat' },
-      { key: 'GPS Lng',      val: photo.lng != null ? photo.lng.toFixed(8) : '',              metaKey: 'lng' },
-      { key: 'GPS Alt (m)',  val: toNum(exif.GPSAltitude) != null ? toNum(exif.GPSAltitude).toFixed(1) : '', metaKey: 'GPSAltitude' },
-      { key: 'Software',     val: exif.Software || '',  metaKey: 'Software' },
-    ];
-    const fieldsHtml = fields.map(f => `
-      <div class="meta-field-row">
-        <span class="meta-field-key">${f.key}</span>
-        <input class="meta-field-val"
-          value="${(f.val || '').replace(/"/g, '&quot;')}"
-          ${f.readonly ? 'readonly' : ''}
-          ${f.metaKey  ? `data-meta-key="${f.metaKey}" data-photo-id="${photo.id}"` : ''}
-          placeholder="${f.readonly ? '' : '—'}">
-      </div>`).join('');
-    return `
-      <div class="meta-photo-entry">
-        <div class="meta-photo-header ${isOpen ? 'open' : ''}" data-id="${photo.id}">
-          <img class="meta-photo-thumb" src="${photo.url}" alt="">
-          <span class="meta-photo-name">${photo.name}</span>
-          <span class="meta-photo-chevron">▶</span>
-        </div>
-        <div class="meta-fields ${isOpen ? 'open' : ''}">${fieldsHtml}</div>
-      </div>`;
-  }).join('');
-
-  list.querySelectorAll('.meta-photo-header').forEach(header => {
-    header.addEventListener('click', () => {
-      header.classList.toggle('open');
-      header.nextElementSibling.classList.toggle('open');
-    });
-  });
-
-  list.querySelectorAll('.meta-field-val[data-meta-key]').forEach(input => {
-    input.addEventListener('change', () => {
-      const photo  = photos.find(p => p.id == input.dataset.photoId);
-      if (!photo) return;
-      const metaKey = input.dataset.metaKey;
-      const newVal  = input.value.trim();
-      if (!photo.exif) photo.exif = {};
-      if (metaKey === 'lat') {
-        const v = parseFloat(newVal); if (!isNaN(v)) photo.lat = v;
-      } else if (metaKey === 'lng') {
-        const v = parseFloat(newVal); if (!isNaN(v)) photo.lng = v;
-      } else {
-        const numFields = ['FocalLength','FNumber','ISO','GPSAltitude'];
-        photo.exif[metaKey] = numFields.includes(metaKey) ? parseFloat(newVal) : newVal;
-      }
-      if (markers[photo.id] && (metaKey === 'lat' || metaKey === 'lng')) {
-        if (photo.lat != null && photo.lng != null)
-          markers[photo.id].setLatLng([photo.lat, photo.lng]);
-      }
-      showToast('<span class="accent">' + metaKey + '</span> updated');
-    });
-  });
+  // The standalone Metadata tab was removed — bulk editing now lives
+  // directly in the Photos tab's EXIF DATA panel (see toggleBulkEdit / applyBulkEdit).
+  return;
 }
 
 window.toggleBulkEdit = function() {

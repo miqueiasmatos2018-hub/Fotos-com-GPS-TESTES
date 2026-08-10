@@ -27,6 +27,28 @@ L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
   attribution: '© Google'
 }).addTo(map);
 
+// ── Prevent marker clicks from being swallowed as a map drag when rotated ──
+// leaflet-rotate intercepts mousedown/touchstart on the map container to
+// start its own rotated-drag handling. Because that listener sits on an
+// ancestor of the marker icons, a marker's own stopPropagation (via
+// bubblingMouseEvents:false) doesn't reach it in time — the plugin still
+// treats the gesture as a map drag instead of a marker click, which is
+// exactly what causes clicks near the edges/corners to shove the map
+// sideways instead of opening the popup. Intercepting the event even
+// earlier, in the capture phase on `document`, stops it before it can
+// reach leaflet-rotate's handler at all whenever the gesture starts on a
+// marker icon.
+function _isMarkerIconEvent(e) {
+  return !!(e.target && e.target.closest &&
+    e.target.closest('.custom-marker-hitbox, .leaflet-marker-icon'));
+}
+document.addEventListener('mousedown', function(e) {
+  if (_isMarkerIconEvent(e)) e.stopPropagation();
+}, true);
+document.addEventListener('touchstart', function(e) {
+  if (_isMarkerIconEvent(e)) e.stopPropagation();
+}, true);
+
 const clusterGroup = L.markerClusterGroup({
   maxClusterRadius: 50,
   spiderfyOnMaxZoom: true,

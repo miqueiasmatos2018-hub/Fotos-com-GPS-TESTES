@@ -723,7 +723,7 @@ function refreshDateTimeline() {
   if (!container) return;
 
   if (!photos.length) {
-    container.innerHTML = '<div class="date-timeline-empty">No photos loaded yet</div>';
+    container.innerHTML = '<div class="date-timeline-empty">NEHUMA FOTO ADICIONADA</div>';
     return;
   }
 

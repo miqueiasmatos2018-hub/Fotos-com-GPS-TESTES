@@ -827,7 +827,7 @@ function addListItem(photo) {
       <div class="photo-name">
         <span class="photo-name-text" title="${photo.name}">${photo.name}</span>
         <button class="relocate-btn" title="Clicar no mapa para definir localização">🗺</button>
-        <button class="rename-btn" title="Rename">✎</button>
+        <button class="rename-btn" title="Renomear">✎</button>
       </div>
       <div class="photo-coords ${hasGPS ? 'has-gps' : 'no-gps'}">${coordText}</div>
     </div>
@@ -908,9 +908,9 @@ function startRename(id, item) {
       const exif = photo.exif || {};
       const rows = [
         ['Coordinates', `${photo.lat.toFixed(6)}, ${photo.lng.toFixed(6)}`],
-        (exif.DateTimeOriginal || exif.CreateDate) ? ['Date Taken', formatDate(exif.DateTimeOriginal || exif.CreateDate)] : null,
+        (exif.DateTimeOriginal || exif.CreateDate) ? ['Data', formatDate(exif.DateTimeOriginal || exif.CreateDate)] : null,
         exif.Make ? ['Camera', `${exif.Make || ''} ${exif.Model || ''}`.trim()] : null,
-        toNum(exif.FocalLength) ? ['Focal Length', `${toNum(exif.FocalLength).toFixed(1)}mm`] : null,
+        toNum(exif.FocalLength) ? ['Distancia Focal', `${toNum(exif.FocalLength).toFixed(1)}mm`] : null,
         exif.ISO ? ['ISO', exif.ISO] : null,
         toNum(exif.ExposureTime) ? ['Exposure', `1/${Math.round(1/toNum(exif.ExposureTime))}s`] : null,
       ].filter(Boolean);
@@ -959,12 +959,12 @@ function buildPhotoPopupHtml(photo) {
           value="${photo.lng != null ? photo.lng.toFixed(8) : ''}" placeholder="—" type="number" step="any">
       </div>
       <div class="popup-edit-row">
-        <span class="popup-edit-label">Date Taken</span>
+        <span class="popup-edit-label">Data</span>
         <input class="popup-edit-input" data-field="DateTimeOriginal" data-id="${id}"
           value="${exif.DateTimeOriginal ? formatDate(exif.DateTimeOriginal) : ''}" placeholder="—">
       </div>
       <div class="popup-btn-row">
-        <button class="popup-save-btn" onclick="savePopupEdits('${id}')">SAVE</button>
+        <button class="popup-save-btn" onclick="savePopupEdits('${id}')">SALVAR</button>
         <button class="popup-relocate-btn" onclick="startRelocateMode('${id}')" title="Click map to redefine location">🗺</button>
         <button class="popup-relocate-btn" onclick="openSVAtMarker(${photo.lat}, ${photo.lng})" title="Abrir no Google Maps">🌐</button>
       </div>
@@ -1208,28 +1208,28 @@ function showDetail(photo) {
   const exif = photo.exif || {};
   // editable fields: [key, label, exifKey, format hint]
   const editableFields = [
-    ['DateTimeOriginal', 'Date Taken', 'datetime-local'],
-    ['Make', 'Camera Make', 'text'],
-    ['Model', 'Camera Model', 'text'],
-    ['LensModel', 'Lens', 'text'],
-    ['FocalLength', 'Focal Length (mm)', 'number'],
-    ['FNumber', 'Aperture (f/)', 'number'],
+    ['DateTimeOriginal', 'Data', 'datetime-local'],
+    ['Make', 'Marca da Câmera', 'text'],
+    ['Model', 'Modelo da Câmera', 'text'],
+    ['LensModel', 'Lente', 'text'],
+    ['FocalLength', 'Distancia Focal (mm)', 'number'],
+    ['FNumber', 'Abertura (f/)', 'number'],
     ['ISO', 'ISO', 'number'],
     ['Software', 'Software', 'text'],
     ['GPSAltitude', 'GPS Alt (m)', 'number'],
   ];
 
   const fields = [
-    ['File Name', photo.name, null],
-    ['File Size', formatSize(photo.file.size), null],
-    ['Dimensions', exif.ImageWidth ? `${exif.ImageWidth} × ${exif.ImageHeight}` : '—', null],
-    ['Date Taken', exif.DateTimeOriginal ? formatDate(exif.DateTimeOriginal) : '—', 'DateTimeOriginal'],
-    ['Camera Make', exif.Make || '—', 'Make'],
-    ['Camera Model', exif.Model || '—', 'Model'],
+    ['Nome do Arquivo', photo.name, null],
+    ['Tamanho do Arquivo', formatSize(photo.file.size), null],
+    ['Dimensões', exif.ImageWidth ? `${exif.ImageWidth} × ${exif.ImageHeight}` : '—', null],
+    ['Data', exif.DateTimeOriginal ? formatDate(exif.DateTimeOriginal) : '—', 'DateTimeOriginal'],
+    ['Marca da Câmera', exif.Make || '—', 'Make'],
+    ['Modelo da Câmera', exif.Model || '—', 'Model'],
     ['Lens', exif.LensModel || '—', 'LensModel'],
-    ['Focal Length', exif.FocalLength ? `${exif.FocalLength}mm` : '—', 'FocalLength'],
-    ['Aperture', exif.FNumber ? `f/${exif.FNumber}` : '—', 'FNumber'],
-    ['Shutter Speed', exif.ExposureTime ? `1/${Math.round(1/exif.ExposureTime)}s` : '—', null],
+    ['Distancia Focal', exif.FocalLength ? `${exif.FocalLength}mm` : '—', 'FocalLength'],
+    ['Abertura', exif.FNumber ? `f/${exif.FNumber}` : '—', 'FNumber'],
+    ['Velocidade do Obturador', exif.ExposureTime ? `1/${Math.round(1/exif.ExposureTime)}s` : '—', null],
     ['ISO', exif.ISO || '—', 'ISO'],
     ['Flash', exif.Flash != null ? (exif.Flash ? 'Yes' : 'No') : '—', null],
     ['GPS Lat', photo.lat != null ? photo.lat.toFixed(8) : 'Not available', 'lat'],
@@ -1293,7 +1293,7 @@ function commitMetaEdit(el, photo) {
     const exif = photo.exif || {};
     const rows = [
       ['Coordinates', photo.lat != null ? `${photo.lat.toFixed(6)}, ${photo.lng.toFixed(6)}` : '—'],
-      exif.DateTimeOriginal ? ['Date Taken', formatDate(exif.DateTimeOriginal)] : null,
+      exif.DateTimeOriginal ? ['Data', formatDate(exif.DateTimeOriginal)] : null,
       exif.Make ? ['Camera', `${exif.Make || ''} ${exif.Model || ''}`.trim()] : null,
     ].filter(Boolean);
     const rowsHtml = rows.map(([k, v]) => `<div class="popup-row">${k} <span>${v}</span></div>`).join('');
@@ -1314,7 +1314,7 @@ let metaEditMode = false;
 window.toggleMetaEdit = function() {
   metaEditMode = !metaEditMode;
   const btn = document.getElementById('editMetaBtn');
-  btn.textContent = metaEditMode ? '✓ DONE' : '✎ EDIT';
+  btn.textContent = metaEditMode ? '✓ FEITO' : '✎ EDITAR';
   btn.classList.toggle('active', metaEditMode);
 
   detailRows.querySelectorAll('.detail-row.editable .detail-val').forEach(el => {

@@ -2139,6 +2139,20 @@ window.autoLoadKmlFromFolder = async function() {
 (function() {
   let _bearing = 0;
 
+  // leaflet-rotate + marker-cluster can leave a marker's clickable hit-box
+  // out of sync with where it's visually drawn once the map is tilted —
+  // the drift grows with distance from the map center, so it's worst at
+  // the corners (clicking there hits the map underneath and starts a pan
+  // instead of opening the marker's popup). Forcing each marker to
+  // re-resolve its screen position, and the cluster icons to redraw,
+  // keeps the hit-box aligned with the visible icon.
+  function _realignMarkerHitboxes() {
+    try {
+      Object.values(markers).forEach(m => { if (m.setLatLng) m.setLatLng(m.getLatLng()); });
+      if (clusterGroup && clusterGroup.refreshClusters) clusterGroup.refreshClusters();
+    } catch (e) {}
+  }
+
   function setBearing(deg) {
     _bearing = ((deg % 360) + 360) % 360;
 
@@ -2160,13 +2174,16 @@ window.autoLoadKmlFromFolder = async function() {
     // instead of opening the marker's popup). Forcing each marker to
     // re-resolve its screen position, and the cluster icons to redraw,
     // keeps the hit-box aligned with the visible icon after every rotation.
-    requestAnimationFrame(() => {
-      try {
-        Object.values(markers).forEach(m => { if (m.setLatLng) m.setLatLng(m.getLatLng()); });
-        if (clusterGroup && clusterGroup.refreshClusters) clusterGroup.refreshClusters();
-      } catch (e) {}
-    });
+    requestAnimationFrame(_realignMarkerHitboxes);
   }
+
+  // Same drift can reappear after panning/zooming while the map stays
+  // rotated (leaflet-rotate re-transforms the pane but marker-cluster's
+  // own icon placement doesn't always keep up) — so keep re-syncing
+  // hit-boxes after every pan/zoom whenever the map isn't at bearing 0.
+  map.on('moveend zoomend', () => {
+    if (_bearing !== 0) requestAnimationFrame(_realignMarkerHitboxes);
+  });
 
   // Expose globally so other functions (SNV, etc.) can call it
   window.setBearing = setBearing;

@@ -38,6 +38,48 @@ const clusterGroup = L.markerClusterGroup({
 });
 map.addLayer(clusterGroup);
 
+// ── Rotation-aware marker layer switching ────────────────────────────────
+// leaflet.markercluster computes each icon's screen position with its own
+// internal math, which doesn't fully account for the leaflet-rotate plugin's
+// CSS rotation of the map pane — the click target drifts from the visible
+// icon, worse the farther a marker sits from the map center (worst at the
+// corners). Plain (unclustered) L.markers are positioned by Leaflet core,
+// which leaflet-rotate does patch correctly, so they stay click-accurate.
+// To fix this, markers are moved out of the cluster group into a plain
+// layer whenever the map is rotated, and moved back into the cluster group
+// once bearing returns to 0.
+const plainMarkerLayer = L.layerGroup();
+let _rotatedMode = false;
+
+function addMarkerToActiveLayer(marker) {
+  if (_rotatedMode) plainMarkerLayer.addLayer(marker);
+  else clusterGroup.addLayer(marker);
+}
+function addMarkersToActiveLayer(markerArr) {
+  if (!markerArr || !markerArr.length) return;
+  if (_rotatedMode) markerArr.forEach(m => plainMarkerLayer.addLayer(m));
+  else clusterGroup.addLayers(markerArr);
+}
+function removeMarkerFromActiveLayer(marker) {
+  if (clusterGroup.hasLayer(marker)) clusterGroup.removeLayer(marker);
+  if (plainMarkerLayer.hasLayer(marker)) plainMarkerLayer.removeLayer(marker);
+}
+function syncMarkerLayerMode(rotated) {
+  if (rotated === _rotatedMode) return;
+  _rotatedMode = rotated;
+  const all = Object.values(markers);
+  if (_rotatedMode) {
+    all.forEach(m => { if (clusterGroup.hasLayer(m)) clusterGroup.removeLayer(m); });
+    if (!map.hasLayer(plainMarkerLayer)) map.addLayer(plainMarkerLayer);
+    all.forEach(m => { if (!plainMarkerLayer.hasLayer(m)) plainMarkerLayer.addLayer(m); });
+  } else {
+    all.forEach(m => { if (plainMarkerLayer.hasLayer(m)) plainMarkerLayer.removeLayer(m); });
+    if (map.hasLayer(plainMarkerLayer)) map.removeLayer(plainMarkerLayer);
+    if (all.length) clusterGroup.addLayers(all);
+  }
+}
+window._syncMarkerLayerMode = syncMarkerLayerMode;
+
 // Spiderfy cluster on hover so overlapping markers spread apart
 let _spiderfyTimer = null;
 clusterGroup.on('clustermouseover', function(e) {
@@ -392,7 +434,7 @@ document.addEventListener('keydown', e => {
 
     // Remove marker
     const m = markers[photo.id];
-    if (m) { clusterGroup.removeLayer(m); delete markers[photo.id]; }
+    if (m) { removeMarkerFromActiveLayer(m); delete markers[photo.id]; }
 
     // Revoke blob URL
     if (photo.url) URL.revokeObjectURL(photo.url);
@@ -494,7 +536,7 @@ async function handleFiles(fileList) {
   }
 
   // Batch-add all markers at once
-  if (pendingMarkers.length) clusterGroup.addLayers(pendingMarkers);
+  if (pendingMarkers.length) addMarkersToActiveLayer(pendingMarkers);
 
   if (photos.some(p => p.lat != null)) {
     emptyState.style.display = 'none';
@@ -1167,7 +1209,7 @@ function buildMarker(photo) {
 
 function addMarker(photo) {
   const marker = buildMarker(photo);
-  clusterGroup.addLayer(marker);
+  addMarkerToActiveLayer(marker);
 
   markers[photo.id] = marker;
 }
@@ -1589,7 +1631,7 @@ window.clearAll = function() {
   photos.length = 0;
   _knownDupKeys.clear();
   _knownNoGpsIds.clear();
-  Object.values(markers).forEach(m => clusterGroup.removeLayer(m));
+  Object.values(markers).forEach(m => removeMarkerFromActiveLayer(m));
   Object.keys(markers).forEach(k => delete markers[k]);
   photoList.innerHTML = '';
   detailPanel.style.display = 'none';
@@ -2139,20 +2181,6 @@ window.autoLoadKmlFromFolder = async function() {
 (function() {
   let _bearing = 0;
 
-  // leaflet-rotate + marker-cluster can leave a marker's clickable hit-box
-  // out of sync with where it's visually drawn once the map is tilted —
-  // the drift grows with distance from the map center, so it's worst at
-  // the corners (clicking there hits the map underneath and starts a pan
-  // instead of opening the marker's popup). Forcing each marker to
-  // re-resolve its screen position, and the cluster icons to redraw,
-  // keeps the hit-box aligned with the visible icon.
-  function _realignMarkerHitboxes() {
-    try {
-      Object.values(markers).forEach(m => { if (m.setLatLng) m.setLatLng(m.getLatLng()); });
-      if (clusterGroup && clusterGroup.refreshClusters) clusterGroup.refreshClusters();
-    } catch (e) {}
-  }
-
   function setBearing(deg) {
     _bearing = ((deg % 360) + 360) % 360;
 
@@ -2167,14 +2195,9 @@ window.autoLoadKmlFromFolder = async function() {
       try { map.setBearing(_bearing); } catch(e) {}
     }
 
-    // leaflet-rotate + marker-cluster can leave a marker's clickable hit-box
-    // out of sync with where it's visually drawn once the map is tilted —
-    // the drift grows with distance from the map center, so it's worst at
-    // the corners (clicking there hits the map underneath and starts a pan
-    // instead of opening the marker's popup). Forcing each marker to
-    // re-resolve its screen position, and the cluster icons to redraw,
-    // keeps the hit-box aligned with the visible icon after every rotation.
-    requestAnimationFrame(_realignMarkerHitboxes);
+    // Bypass clustering while rotated so markers stay click-accurate
+    // (see syncMarkerLayerMode near the clusterGroup setup for why).
+    syncMarkerLayerMode(_bearing !== 0);
   }
 
   // Expose globally so other functions (SNV, etc.) can call it

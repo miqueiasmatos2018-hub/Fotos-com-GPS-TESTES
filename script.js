@@ -28,39 +28,61 @@ L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
 }).addTo(map);
 
 // ── Prevent marker clicks from being swallowed as a map drag when rotated ──
-// leaflet-rotate attaches its own rotated-drag handling in the CAPTURE
-// phase on the map container. Capture listeners on an ancestor always run
-// BEFORE the event reaches a descendant (like a marker icon) — so nothing
-// the marker itself does (bubblingMouseEvents:false, stopPropagation in
-// its own click handler, even disabling map.dragging) can stop it, because
-// leaflet-rotate's handler has already run by the time the event would
-// get there. That's what causes clicks near the edges/corners to shove
-// the map sideways instead of opening the popup.
+// When the map is rotated, a marker's *actual clickable DOM position* can
+// end up out of sync with where its icon is visually drawn (leaflet-rotate
+// re-transforms the map pane, but marker icon placement doesn't always
+// follow correctly) — worse the farther a marker sits from the map center,
+// so worst at the corners. That means a click at the icon's visible
+// location can land on the map underneath instead of the marker element
+// itself, which both misses the marker AND starts a map drag.
 //
-// The only way to beat a capture-phase handler is to intercept even
-// earlier — on `document`, which always fires first — and handle the tap
-// ourselves, then stop the event from propagating any further so
-// leaflet-rotate's handler never runs at all.
-function _getMarkerIdFromEvent(e) {
-  if (!e.target || !e.target.closest) return null;
-  const hitbox = e.target.closest('.custom-marker-hitbox');
-  if (!hitbox) return null;
-  const inner = hitbox.querySelector('[id^="marker-"]');
-  if (!inner) return null;
-  return inner.id.replace(/^marker-/, '');
+// Relying on "did this event's DOM target land on a marker element" isn't
+// reliable here, since the marker element may not actually be where it
+// looks. Instead, on every press we independently recompute where each
+// photo marker SHOULD be on screen right now (map.latLngToContainerPoint,
+// which reflects the current rotation) and check if the press is close to
+// any of them. If so, we handle it as that marker's tap ourselves and
+// stop the gesture from reaching leaflet-rotate's drag handling —
+// regardless of what DOM element technically received the event.
+function _clientToContainerPoint(e) {
+  const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+  const rect = map.getContainer().getBoundingClientRect();
+  return L.point(t.clientX - rect.left, t.clientY - rect.top);
+}
+
+function _findNearestMarkerId(containerPoint, thresholdPx) {
+  let bestId = null, bestDist = Infinity;
+  for (const id in markers) {
+    const m = markers[id];
+    if (!m || !m.getLatLng) continue;
+    const pt = map.latLngToContainerPoint(m.getLatLng());
+    const dx = pt.x - containerPoint.x, dy = pt.y - containerPoint.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < bestDist) { bestDist = dist; bestId = id; }
+  }
+  return bestDist <= thresholdPx ? bestId : null;
 }
 
 let _lastMarkerTapId = null;
 let _lastMarkerTapTime = 0;
 
-function _onMarkerPointerDownCapture(e) {
-  const id = _getMarkerIdFromEvent(e);
-  if (!id) return;
+function _onMapPointerDownCapture(e) {
+  // Ignore right-click / non-primary buttons
+  if (e.type === 'mousedown' && e.button !== 0) return;
+  // Don't hijack taps while placing a new point (relocate / ponto picking)
+  if (typeof _pickingForId !== 'undefined' && _pickingForId) return;
+  if (typeof _pontoPickingHandler !== 'undefined' && _pontoPickingHandler) return;
 
-  // Stop here so leaflet-rotate's own container listener never sees this
-  // gesture. Since that also means the marker's own click/popup handling
-  // won't run (it never gets delivered), replicate it manually below.
+  const containerEl = map.getContainer();
+  if (!e.target || !containerEl.contains(e.target)) return;
+
+  const pt = _clientToContainerPoint(e);
+  const id = _findNearestMarkerId(pt, 26);
+  if (!id) return; // not close enough to any marker — let the map behave normally
+
+  // Stop here so leaflet-rotate's drag handling never sees this gesture.
   e.stopPropagation();
+  if (e.cancelable) e.preventDefault();
 
   // mousedown and touchstart can both fire for the same physical tap on
   // touch devices — only act once per gesture.
@@ -74,8 +96,8 @@ function _onMarkerPointerDownCapture(e) {
   if (typeof selectPhoto === 'function') selectPhoto(id);
   marker.openPopup();
 }
-document.addEventListener('mousedown', _onMarkerPointerDownCapture, true);
-document.addEventListener('touchstart', _onMarkerPointerDownCapture, true);
+document.addEventListener('mousedown', _onMapPointerDownCapture, true);
+document.addEventListener('touchstart', _onMapPointerDownCapture, true);
 
 const clusterGroup = L.markerClusterGroup({
   maxClusterRadius: 50,

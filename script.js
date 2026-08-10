@@ -965,8 +965,8 @@ function buildPhotoPopupHtml(photo) {
       </div>
       <div class="popup-btn-row">
         <button class="popup-save-btn" onclick="savePopupEdits('${id}')">SAVE</button>
-        <button class="popup-relocate-btn" onclick="startRelocateMode('${id}')" title="Click map to redefine location">📍</button>
-        <button class="popup-relocate-btn" onclick="openSVAtMarker(${photo.lat}, ${photo.lng})" title="Abrir no Google Maps">🗺</button>
+        <button class="popup-relocate-btn" onclick="startRelocateMode('${id}')" title="Click map to redefine location">🗺</button>
+        <button class="popup-relocate-btn" onclick="openSVAtMarker(${photo.lat}, ${photo.lng})" title="Abrir no Google Maps">🌐</button>
       </div>
     </div>
   `;

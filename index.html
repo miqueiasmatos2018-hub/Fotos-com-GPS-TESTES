@@ -119,11 +119,11 @@
       </div>
 
       <div class="detail-panel" id="detailPanel" style="display:none">
-        <div class="detail-header">
-          <span style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;">
-            EXIF DATA <span class="meta-saved-dot" id="metaSavedDot"></span>
+        <div class="detail-header" id="detailHeader" onclick="toggleDetailCollapse(event)">
+          <span style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;display:flex;align-items:center;gap:8px;">
+            <span class="detail-chevron" id="detailChevron">▶</span> EXIF DATA <span class="meta-saved-dot" id="metaSavedDot"></span>
           </span>
-          <button class="btn-edit-meta" id="editMetaBtn" onclick="toggleMetaEdit()">✎ EDIT</button>
+          <button class="btn-edit-meta" id="editMetaBtn" onclick="event.stopPropagation();toggleMetaEdit()">✎ EDIT</button>
         </div>
         <div class="detail-rows" id="detailRows"></div>
       </div>

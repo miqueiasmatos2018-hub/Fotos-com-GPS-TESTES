@@ -868,9 +868,21 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
   }
 
-  .detail-rows { padding: 4px 0; }
+  .detail-chevron {
+    font-size: 9px;
+    color: var(--muted);
+    transition: transform 0.2s;
+    display: inline-block;
+    transform: rotate(90deg);
+  }
+  .detail-panel.collapsed .detail-chevron { transform: rotate(0deg); }
+
+  .detail-rows { padding: 4px 0; max-height: 340px; overflow-y: auto; transition: max-height 0.2s ease; }
+  .detail-panel.collapsed .detail-rows { display: none; }
 
   .detail-row {
     display: flex;

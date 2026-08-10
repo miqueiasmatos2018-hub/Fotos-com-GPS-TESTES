@@ -1258,6 +1258,7 @@ function showDetail(photo) {
   });
 
   detailPanel.style.display = 'block';
+  detailPanel.classList.toggle('collapsed', detailCollapsed);
 }
 
 function commitMetaEdit(el, photo) {
@@ -1326,6 +1327,15 @@ window.toggleMetaEdit = function() {
     const first = detailRows.querySelector('.detail-row.editable .detail-val');
     if (first) first.focus();
   }
+};
+
+let detailCollapsed = false;
+
+window.toggleDetailCollapse = function(e) {
+  // Don't toggle collapse when the click originated from the EDIT button
+  if (e && e.target.closest && e.target.closest('#editMetaBtn')) return;
+  detailCollapsed = !detailCollapsed;
+  detailPanel.classList.toggle('collapsed', detailCollapsed);
 };
 
 function ensureJpgExtension(name) {

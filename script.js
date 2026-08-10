@@ -2177,14 +2177,6 @@ window.autoLoadKmlFromFolder = async function() {
     requestAnimationFrame(_realignMarkerHitboxes);
   }
 
-  // Same drift can reappear after panning/zooming while the map stays
-  // rotated (leaflet-rotate re-transforms the pane but marker-cluster's
-  // own icon placement doesn't always keep up) — so keep re-syncing
-  // hit-boxes after every pan/zoom whenever the map isn't at bearing 0.
-  map.on('moveend zoomend', () => {
-    if (_bearing !== 0) requestAnimationFrame(_realignMarkerHitboxes);
-  });
-
   // Expose globally so other functions (SNV, etc.) can call it
   window.setBearing = setBearing;
   window.getBearing = () => _bearing;

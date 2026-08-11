@@ -775,6 +775,11 @@ async function processFile(file, pendingMarkers) {
   const photo = { id, file, url, name: file.name, lat, lng, exif, megapixels: null };
   photos.push(photo);
 
+  // Size/GPS issues are known immediately (no image decode needed) — check
+  // right away, before any DOM work below that could throw and skip past it.
+  clearTimeout(window._issuesAlertTimer);
+  window._issuesAlertTimer = setTimeout(() => { checkPhotoIssues(); }, 800);
+
   // Generate thumbnail in background — don't await, keeps processing fast
   const _mpImg = new Image();
   _mpImg.onload = function() {
@@ -822,11 +827,6 @@ async function processFile(file, pendingMarkers) {
   _mpImg.src = url;
 
   addListItem(photo);
-
-  // Size/GPS issues are known immediately (no image decode needed) — don't
-  // wait on MP measurement, which can be slow or fail for very large files.
-  clearTimeout(window._issuesAlertTimer);
-  window._issuesAlertTimer = setTimeout(() => { checkPhotoIssues(); }, 800);
 
   if (lat != null) {
     if (pendingMarkers) {
@@ -2664,12 +2664,13 @@ function checkPhotoIssues() {
   const noGps    = photos.filter(p => p.lat == null);
   const lowMp    = photos.filter(p => p.megapixels != null && p.megapixels < MIN_PHOTO_MP);
   const overSize = photos.filter(p => p.file && p.file.size > MAX_PHOTO_BYTES);
+  console.log('[checkPhotoIssues]', { total: photos.length, noGps: noGps.length, lowMp: lowMp.length, overSize: overSize.length });
 
   const overlay  = document.getElementById('issuesAlertOverlay');
   const list     = document.getElementById('issuesAlertList');
   const upBtn    = document.getElementById('mpUpscaleBtn');
   const compBtn  = document.getElementById('sizeCompressBtn');
-  if (!overlay || !list) return;
+  if (!overlay || !list) { console.warn('[checkPhotoIssues] overlay/list element not found in DOM'); return; }
 
   if (!noGps.length && !lowMp.length && !overSize.length) {
     // Everything resolved (or nothing to report) — make sure it's closed.

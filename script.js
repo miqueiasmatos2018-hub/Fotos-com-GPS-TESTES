@@ -1813,7 +1813,7 @@ function updateDnitPopupRow(layer, text) {
   const popup = layer.getPopup();
   if (!popup) return;
   const html = popup.getContent();
-  const re = new RegExp(`(id="${layer._dnitRowId}"[^>]*>\\s*DNIT km <span>)[^<]*(</span>)`);
+  const re = new RegExp(`(id="${layer._dnitRowId}"[^>]*>\\s*DNIT km:\\s*<span>)[^<]*(</span>)`);
   const updated = html.replace(re, `$1${text}$2`);
   layer.setPopupContent(updated);
 }

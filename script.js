@@ -677,7 +677,6 @@ async function handleFiles(fileList) {
     progressFill.style.width = '0%';
   }, 1200);
   checkDuplicateGps();
-  checkNoGps(photos.slice(-all.length));
 }
 
 const _knownDupKeys = new Set(); // track already-alerted duplicate coords
@@ -809,10 +808,9 @@ async function processFile(file, pendingMarkers) {
       dot.classList.add(mp >= 12 ? 'ok' : 'low');
       dot.title = `${mp.toFixed(1)} MP — ${_mpImg.naturalWidth}×${_mpImg.naturalHeight}`;
     }
-    clearTimeout(window._mpAlertTimer);
-    window._mpAlertTimer = setTimeout(() => {
-      const lowCount = photos.filter(p => p.megapixels != null && p.megapixels < 12).length;
-      if (lowCount > 0) showMpAlert(lowCount);
+    clearTimeout(window._issuesAlertTimer);
+    window._issuesAlertTimer = setTimeout(() => {
+      checkPhotoIssues();
     }, 800);
   };
   _mpImg.onerror = () => {};
@@ -1702,7 +1700,6 @@ window.fitAll = function() {
 window.clearAll = function() {
   photos.length = 0;
   _knownDupKeys.clear();
-  _knownNoGpsIds.clear();
   Object.values(markers).forEach(m => removeMarkerFromActiveLayer(m));
   Object.keys(markers).forEach(k => delete markers[k]);
   photoList.innerHTML = '';
@@ -2457,14 +2454,130 @@ window.upscaleLowMpPhotos = async function() {
 
   bar.style.width = '100%';
   label.textContent = `✓ ${lowPhotos.length} foto(s) redimensionada(s)`;
+  btn.disabled = false;
 
-  // Update the alert count
-  const remaining = photos.filter(p => p.megapixels != null && p.megapixels < TARGET_MP).length;
-  document.getElementById('mpAlertCount').textContent = remaining;
-  if (remaining === 0) {
-    setTimeout(() => closeMpAlert(), 1000);
-  }
+  // Refresh the combined issues popup — updates counts, or auto-closes
+  // if this was the last remaining issue.
+  setTimeout(() => {
+    progress.style.display = 'none';
+    checkPhotoIssues();
+  }, 900);
 };
+
+// Shrink photos over MAX_PHOTO_BYTES (30MB) down under that limit without
+// visibly distorting them (aspect ratio is always preserved) and without
+// ever dropping below MIN_PHOTO_MP (12MP). Tries reducing JPEG quality
+// first — usually enough on its own — and only reduces dimensions if
+// quality reduction alone isn't sufficient, stopping at the 12MP floor.
+window.compressOverSizePhotos = async function() {
+  const overPhotos = photos.filter(p => p.file && p.file.size > MAX_PHOTO_BYTES);
+  if (!overPhotos.length) return;
+
+  const btn      = document.getElementById('sizeCompressBtn');
+  const progress = document.getElementById('sizeCompressProgress');
+  const bar      = document.getElementById('sizeCompressBar');
+  const label    = document.getElementById('sizeCompressLabel');
+
+  btn.disabled = true;
+  progress.style.display = 'block';
+
+  // Try a JPEG quality at the given (possibly downscaled) dimensions and
+  // return the resulting blob.
+  function renderAt(img, w, h, quality) {
+    return new Promise(resolve => {
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => resolve(blob), 'image/jpeg', quality);
+    });
+  }
+
+  for (let i = 0; i < overPhotos.length; i++) {
+    const photo = overPhotos[i];
+    label.textContent = `${i + 1} / ${overPhotos.length} — ${photo.name}`;
+    bar.style.width = ((i / overPhotos.length) * 100) + '%';
+
+    await new Promise(resolve => {
+      const img = new Image();
+      img.onload = async () => {
+        const srcW = img.naturalWidth;
+        const srcH = img.naturalHeight;
+
+        // Never shrink dimensions below what's needed to stay at/above
+        // the 12MP floor.
+        const minScale = Math.min(1, Math.sqrt((MIN_PHOTO_MP * 1_000_000) / (srcW * srcH)));
+
+        let bestBlob = null;
+        let bestW = srcW, bestH = srcH;
+
+        // 1) Try quality reduction alone, at full size, first.
+        const qualitySteps = [0.9, 0.8, 0.7, 0.6, 0.5];
+        for (const q of qualitySteps) {
+          const blob = await renderAt(img, srcW, srcH, q);
+          if (blob && (!bestBlob || blob.size < bestBlob.size)) { bestBlob = blob; bestW = srcW; bestH = srcH; }
+          if (blob && blob.size <= MAX_PHOTO_BYTES) { bestBlob = blob; bestW = srcW; bestH = srcH; break; }
+        }
+
+        // 2) If still over budget, progressively downscale (never below
+        // the 12MP floor), retrying a mid-range quality at each step.
+        if (!bestBlob || bestBlob.size > MAX_PHOTO_BYTES) {
+          let scale = 0.9;
+          while (scale >= minScale) {
+            const w = Math.round(srcW * scale);
+            const h = Math.round(srcH * scale);
+            const blob = await renderAt(img, w, h, 0.85);
+            if (blob && (!bestBlob || blob.size < bestBlob.size)) { bestBlob = blob; bestW = w; bestH = h; }
+            if (blob && blob.size <= MAX_PHOTO_BYTES) break;
+            if (scale <= minScale) break;
+            scale = Math.max(minScale, scale - 0.1);
+          }
+        }
+
+        if (!bestBlob) { resolve(); return; }
+
+        URL.revokeObjectURL(photo.url);
+        const newUrl  = URL.createObjectURL(bestBlob);
+        const newFile = new File([bestBlob], photo.name, { type: 'image/jpeg' });
+        photo.url        = newUrl;
+        photo.file       = newFile;
+        photo.megapixels = (bestW * bestH) / 1_000_000;
+        photo.imgWidth   = bestW;
+        photo.imgHeight  = bestH;
+
+        // Update thumbnail
+        const thumb = document.querySelector(`.photo-item[data-id="${photo.id}"] .photo-thumb`);
+        if (thumb) thumb.src = newUrl;
+
+        // Update mp-dot (dimensions may have changed slightly)
+        const dot = document.querySelector(`.photo-item[data-id="${photo.id}"] .mp-dot`);
+        if (dot) {
+          dot.classList.remove('low', 'unknown');
+          dot.classList.add(photo.megapixels >= MIN_PHOTO_MP ? 'ok' : 'low');
+          dot.title = `${photo.megapixels.toFixed(1)} MP — ${bestW}×${bestH}`;
+        }
+
+        // Update popup / detail panel if relevant
+        const m = markers[photo.id];
+        if (m) m.setPopupContent(buildPhotoPopupHtml(photo));
+        if (activeId === photo.id) showDetail(photo);
+
+        resolve();
+      };
+      img.onerror = resolve;
+      img.src = photo.url;
+    });
+  }
+
+  bar.style.width = '100%';
+  label.textContent = `✓ ${overPhotos.length} foto(s) compactada(s)`;
+  btn.disabled = false;
+
+  setTimeout(() => {
+    progress.style.display = 'none';
+    checkPhotoIssues();
+  }, 900);
+};
+
 // ─── RANDOMIZE DUPLICATE GPS ──────────────────────────────────────────────────
 // Wire slider immediately (script runs after DOM is built)
 (function wireDupSlider() {
@@ -2533,38 +2646,43 @@ window.randomizeDupGps = function() {
   if (activeId) showDetail(photos.find(p => p.id === activeId));
 };
 
-// ─── NO GPS ALERT ─────────────────────────────────────────────────────────────
-const _knownNoGpsIds = new Set();
+// ─── PHOTO ISSUES ALERT (No GPS / Low MP / Over 30MB) ─────────────────────────
+const MAX_PHOTO_BYTES = 30 * 1024 * 1024; // 30MB
+const MIN_PHOTO_MP    = 12;
 
-function checkNoGps(newPhotos) {
-  const noGps = newPhotos.filter(p => p.lat == null);
-  const newNoGps = noGps.filter(p => !_knownNoGpsIds.has(p.id));
-  if (!newNoGps.length) return;
-  newNoGps.forEach(p => _knownNoGpsIds.add(p.id));
-  const overlay = document.getElementById('nogpsAlertOverlay');
-  const countEl = document.getElementById('nogpsAlertCount');
-  if (!overlay || !countEl) return;
-  countEl.textContent = newNoGps.length;
+function checkPhotoIssues() {
+  const noGps    = photos.filter(p => p.lat == null);
+  const lowMp    = photos.filter(p => p.megapixels != null && p.megapixels < MIN_PHOTO_MP);
+  const overSize = photos.filter(p => p.file && p.file.size > MAX_PHOTO_BYTES);
+
+  const overlay  = document.getElementById('issuesAlertOverlay');
+  const list     = document.getElementById('issuesAlertList');
+  const upBtn    = document.getElementById('mpUpscaleBtn');
+  const compBtn  = document.getElementById('sizeCompressBtn');
+  if (!overlay || !list) return;
+
+  if (!noGps.length && !lowMp.length && !overSize.length) {
+    // Everything resolved (or nothing to report) — make sure it's closed.
+    overlay.classList.remove('show');
+    return;
+  }
+
+  const rows = [];
+  if (noGps.length)    rows.push(`<div class="issues-alert-row"><span class="issues-alert-row-count">${noGps.length}</span><span class="issues-alert-row-label">foto${noGps.length > 1 ? 's' : ''} sem GPS</span></div>`);
+  if (lowMp.length)    rows.push(`<div class="issues-alert-row"><span class="issues-alert-row-count">${lowMp.length}</span><span class="issues-alert-row-label">foto${lowMp.length > 1 ? 's' : ''} abaixo de 12mp</span></div>`);
+  if (overSize.length) rows.push(`<div class="issues-alert-row"><span class="issues-alert-row-count">${overSize.length}</span><span class="issues-alert-row-label">foto${overSize.length > 1 ? 's' : ''} acima de 30mb</span></div>`);
+  list.innerHTML = rows.join('');
+
+  if (upBtn)   upBtn.style.display   = lowMp.length    ? '' : 'none';
+  if (compBtn) compBtn.style.display = overSize.length ? '' : 'none';
+
   overlay.classList.add('show');
 }
 
-window.closeNoGpsAlert = function(e) {
-  if (e && e.target !== document.getElementById('nogpsAlertOverlay') &&
-      !e.target.classList.contains('nogps-alert-close')) return;
-  document.getElementById('nogpsAlertOverlay').classList.remove('show');
-};
-
-function showMpAlert(count) {
-  const overlay = document.getElementById('mpAlertOverlay');
-  const countEl = document.getElementById('mpAlertCount');
-  if (!overlay || !countEl) return;
-  countEl.textContent = count;
-  overlay.classList.add('show');
-}
-window.closeMpAlert = function(e) {
-  if (e && e.target !== document.getElementById('mpAlertOverlay') &&
-      !e.target.classList.contains('mp-alert-close')) return;
-  document.getElementById('mpAlertOverlay').classList.remove('show');
+window.closeIssuesAlert = function(e) {
+  if (e && e.target !== document.getElementById('issuesAlertOverlay') &&
+      !e.target.classList.contains('issues-alert-close')) return;
+  document.getElementById('issuesAlertOverlay').classList.remove('show');
 };
 
 (function() {

@@ -1277,7 +1277,8 @@
   .rotate-btn.reset { color: #fff; font-size: 12px; }
 
   /* NO GPS ALERT */
-  .nogps-alert-overlay {
+  /* PHOTO ISSUES ALERT POPUP (No GPS / Low MP / Over 30MB) */
+  .issues-alert-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.55);
@@ -1290,105 +1291,28 @@
     transition: opacity 0.3s;
     backdrop-filter: blur(4px);
   }
-  .nogps-alert-overlay.show {
+  .issues-alert-overlay.show {
     opacity: 1;
     pointer-events: all;
   }
-  .nogps-alert-box {
+  .issues-alert-box {
     background: #0a0a0a;
     border: 1.5px solid #f44336;
     border-radius: 10px;
     padding: 36px 44px;
     text-align: center;
     box-shadow: 0 0 60px rgba(244,67,54,0.35), 0 8px 40px rgba(0,0,0,0.8);
-    max-width: 420px;
+    max-width: 440px;
     width: 90%;
+    position: relative;
     animation: nogps-pop 0.3s ease;
   }
   @keyframes nogps-pop {
     from { transform: scale(0.88); opacity: 0; }
     to   { transform: scale(1);    opacity: 1; }
   }
-  .nogps-alert-icon {
+  .issues-alert-icon {
     font-size: 64px;
-    display: block;
-    margin-bottom: 16px;
-    animation: nogps-pulse 1.2s ease-in-out infinite;
-  }
-  @keyframes nogps-pulse {
-    0%, 100% { transform: scale(1);    opacity: 1; }
-    50%       { transform: scale(1.15); opacity: 0.7; }
-  }
-  .nogps-alert-title {
-    font-family: var(--display);
-    font-size: 22px;
-    letter-spacing: 3px;
-    color: #f44336;
-    margin-bottom: 8px;
-  }
-  .nogps-alert-count {
-    font-family: var(--display);
-    font-size: 48px;
-    color: #f44336;
-    display: block;
-    line-height: 1;
-    margin: 8px 0;
-  }
-  .nogps-alert-sub {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 2px;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-top: 4px;
-  }
-  .nogps-alert-close {
-    margin-top: 24px;
-    padding: 8px 28px;
-    background: #f44336;
-    color: #fff;
-    border: none;
-    border-radius: 4px;
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 2px;
-    cursor: pointer;
-    transition: opacity 0.15s;
-    text-transform: uppercase;
-  }
-  .nogps-alert-close:hover { opacity: 0.8; }
-
-  /* MP ALERT POPUP */
-  .mp-alert-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.55);
-    z-index: 99999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.3s;
-    backdrop-filter: blur(4px);
-  }
-  .mp-alert-overlay.show {
-    opacity: 1;
-    pointer-events: all;
-  }
-  .mp-alert-box {
-    background: #0a0a0a;
-    border: 1.5px solid #f44336;
-    border-radius: 10px;
-    padding: 36px 44px;
-    text-align: center;
-    box-shadow: 0 0 60px rgba(244,67,54,0.35), 0 8px 40px rgba(0,0,0,0.8);
-    max-width: 420px;
-    width: 90%;
-    position: relative;
-  }
-  .mp-alert-icon {
-    font-size: 72px;
     line-height: 1;
     display: block;
     margin-bottom: 16px;
@@ -1398,37 +1322,39 @@
     0%, 100% { transform: scale(1);   opacity: 1; }
     50%       { transform: scale(1.18); opacity: 0.7; }
   }
-  .mp-alert-title {
+  .issues-alert-title {
     font-family: var(--display);
-    font-size: 28px;
+    font-size: 26px;
     letter-spacing: 4px;
     color: #f44336;
-    margin-bottom: 12px;
+    margin-bottom: 16px;
   }
-  .mp-alert-body {
+  .issues-alert-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .issues-alert-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 10px;
     font-family: var(--mono);
-    font-size: 13px;
-    letter-spacing: 1px;
-    color: var(--text);
-    line-height: 1.8;
   }
-  .mp-alert-count {
-    font-size: 52px;
+  .issues-alert-row-count {
+    font-size: 30px;
     font-family: var(--display);
     color: #f44336;
-    display: block;
     line-height: 1;
-    margin: 8px 0;
   }
-  .mp-alert-sub {
-    font-family: var(--mono);
+  .issues-alert-row-label {
     font-size: 11px;
-    letter-spacing: 2px;
+    letter-spacing: 1.5px;
     color: var(--muted);
     text-transform: uppercase;
-    margin-top: 4px;
   }
-  .mp-alert-close {
+  .issues-alert-close {
     margin-top: 24px;
     padding: 8px 28px;
     background: #f44336;
@@ -1442,16 +1368,16 @@
     transition: opacity 0.15s;
     text-transform: uppercase;
   }
-  .mp-alert-close:hover { opacity: 0.8; }
+  .issues-alert-close:hover { opacity: 0.8; }
 
-  .mp-alert-actions {
+  .issues-alert-actions {
     display: flex;
     gap: 8px;
     justify-content: center;
     margin-top: 24px;
     flex-wrap: wrap;
   }
-  .mp-alert-upscale {
+  .issues-alert-action-btn {
     padding: 8px 20px;
     background: transparent;
     color: #f44336;
@@ -1464,28 +1390,28 @@
     transition: all 0.15s;
     text-transform: uppercase;
   }
-  .mp-alert-upscale:hover { background: rgba(244,67,54,0.12); }
-  .mp-alert-upscale:disabled { opacity: 0.4; cursor: not-allowed; }
-  .mp-alert-close { margin-top: 0; }
+  .issues-alert-action-btn:hover { background: rgba(244,67,54,0.12); }
+  .issues-alert-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .issues-alert-action-btn[style*="display:none"] { display: none; }
 
-  .mp-upscale-progress {
+  .issues-upscale-progress {
     margin-top: 16px;
   }
-  .mp-upscale-bar-wrap {
+  .issues-progress-bar-wrap {
     height: 3px;
     background: rgba(255,255,255,0.08);
     border-radius: 2px;
     overflow: hidden;
     margin-bottom: 8px;
   }
-  .mp-upscale-bar {
+  .issues-progress-bar {
     height: 100%;
     width: 0%;
     background: #f44336;
     border-radius: 2px;
     transition: width 0.2s;
   }
-  .mp-upscale-label {
+  .issues-progress-label {
     font-family: var(--mono);
     font-size: 9px;
     letter-spacing: 1px;

@@ -2664,13 +2664,12 @@ function checkPhotoIssues() {
   const noGps    = photos.filter(p => p.lat == null);
   const lowMp    = photos.filter(p => p.megapixels != null && p.megapixels < MIN_PHOTO_MP);
   const overSize = photos.filter(p => p.file && p.file.size > MAX_PHOTO_BYTES);
-  console.log('[checkPhotoIssues]', { total: photos.length, noGps: noGps.length, lowMp: lowMp.length, overSize: overSize.length });
 
   const overlay  = document.getElementById('issuesAlertOverlay');
   const list     = document.getElementById('issuesAlertList');
   const upBtn    = document.getElementById('mpUpscaleBtn');
   const compBtn  = document.getElementById('sizeCompressBtn');
-  if (!overlay || !list) { console.warn('[checkPhotoIssues] overlay/list element not found in DOM'); return; }
+  if (!overlay || !list) return;
 
   if (!noGps.length && !lowMp.length && !overSize.length) {
     // Everything resolved (or nothing to report) — make sure it's closed.

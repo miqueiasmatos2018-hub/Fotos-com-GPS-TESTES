@@ -813,10 +813,20 @@ async function processFile(file, pendingMarkers) {
       checkPhotoIssues();
     }, 800);
   };
-  _mpImg.onerror = () => {};
+  _mpImg.onerror = () => {
+    // MP couldn't be measured, but size/GPS checks don't depend on it —
+    // make sure the alert still gets a chance to run.
+    clearTimeout(window._issuesAlertTimer);
+    window._issuesAlertTimer = setTimeout(() => { checkPhotoIssues(); }, 800);
+  };
   _mpImg.src = url;
 
   addListItem(photo);
+
+  // Size/GPS issues are known immediately (no image decode needed) — don't
+  // wait on MP measurement, which can be slow or fail for very large files.
+  clearTimeout(window._issuesAlertTimer);
+  window._issuesAlertTimer = setTimeout(() => { checkPhotoIssues(); }, 800);
 
   if (lat != null) {
     if (pendingMarkers) {

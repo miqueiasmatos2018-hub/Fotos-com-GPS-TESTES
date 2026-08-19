@@ -28,6 +28,64 @@ const ROUTES = {
 
 function _routeSuffix(key) { return key === 'a' ? 'A' : 'B'; }
 
+// ─── LD_INICIO_OAE REFERENCE POINT (found in a dropped KML) ────────────────────
+// Any point whose name contains "LD_INICIO" (same case-insensitive match used
+// elsewhere in the app for DNIT lookups / SNV alignment) gets a dedicated
+// yellow marker named "LD_INICIO_OAE", tracked here so it travels along with
+// the two routes when exported.
+const LD_INICIO_COLOR = '#ffff00';
+const LD_INICIO_POINTS = []; // { lat, lng, marker }
+
+function _extractLdInicioPointsFromKml(parsedLayer) {
+  const found = [];
+  parsedLayer.eachLayer(sl => {
+    const props = (sl.feature && sl.feature.properties) || {};
+    const name = String(props.name || '').toUpperCase();
+    if (!name.includes('LD_INICIO')) return;
+    const latlng = sl.getLatLng ? sl.getLatLng() : (sl.getBounds ? sl.getBounds().getCenter() : null);
+    if (!latlng) return;
+    found.push({ lat: latlng.lat, lng: latlng.lng });
+  });
+  return found;
+}
+
+function _addLdInicioMarker(lat, lng) {
+  const marker = L.circleMarker([lat, lng], {
+    radius: 7,
+    color: '#000',
+    weight: 2,
+    fillColor: LD_INICIO_COLOR,
+    fillOpacity: 0.95
+  }).addTo(map);
+  marker.bindPopup(`
+    <div class="popup-content">
+      <div class="popup-name">LD_INICIO_OAE</div>
+      <div class="popup-row">Lat: <span>${lat.toFixed(8)}</span></div>
+      <div class="popup-row">Lng: <span>${lng.toFixed(8)}</span></div>
+    </div>
+  `);
+  LD_INICIO_POINTS.push({ lat, lng, marker });
+}
+
+// Called from loadKmlFile() once a dropped KML finishes loading:
+//  1. Scans it for any LD_INICIO / LD_INICIO_OAE point and marks it yellow.
+//  2. Uses the KML's filename to auto-fill the editable middle segment of
+//     BOTH route names.
+function registerRouteKmlDrop(parsedLayer, fileName) {
+  const points = _extractLdInicioPointsFromKml(parsedLayer);
+  points.forEach(p => _addLdInicioMarker(p.lat, p.lng));
+  if (points.length) {
+    showToast(`📍 <span class="accent">${points.length}</span> ponto${points.length > 1 ? 's' : ''} LD_INICIO_OAE identificado${points.length > 1 ? 's' : ''}`);
+  }
+
+  const base = fileName.replace(/\.(kml|kmz)$/i, '');
+  ['a', 'b'].forEach(key => {
+    ROUTES[key].nameMiddle = base;
+    const input = document.getElementById('routeName' + _routeSuffix(key));
+    if (input) input.value = base;
+  });
+}
+
 // Builds the full composed name, e.g. "ROTA_ALTERNATIVA_Desvio_Centro_12.4KM"
 // (or "ROTA_ALTERNATIVA_12.4KM" if the editable middle is left blank).
 function _composeRouteName(key) {
@@ -237,12 +295,12 @@ function _hexToKmlColor(hex, opacity) {
 
 window.exportRoutesKML = function() {
   const ready = Object.entries(ROUTES).filter(([, r]) => r.waypoints.length >= 2);
-  if (!ready.length) {
+  if (!ready.length && !LD_INICIO_POINTS.length) {
     showToast('Adicione ao menos 2 paradas em uma rota antes de exportar');
     return;
   }
 
-  const placemarks = ready.map(([key, r]) => {
+  const routePlacemarks = ready.map(([key, r]) => {
     // Prefer the actual road-snapped geometry; fall back to straight lines
     // between stops if OSRM hasn't resolved yet (still exports something).
     const coords = (r.roadCoords && r.roadCoords.length >= 2) ? r.roadCoords : r.waypoints;
@@ -255,14 +313,23 @@ window.exportRoutesKML = function() {
   </Placemark>`;
   }).join('\n');
 
+  const ldPlacemarks = LD_INICIO_POINTS.map(p => `  <Placemark>
+    <name>LD_INICIO_OAE</name>
+    <Style><IconStyle><color>${_hexToKmlColor(LD_INICIO_COLOR, 1)}</color><scale>1.1</scale></IconStyle></Style>
+    <Point><coordinates>${p.lng},${p.lat},0</coordinates></Point>
+  </Placemark>`).join('\n');
+
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-${placemarks}
+${routePlacemarks}${routePlacemarks && ldPlacemarks ? '\n' : ''}${ldPlacemarks}
 </Document>
 </kml>
 `;
 
   triggerDownload(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), 'rotas.kml');
-  showToast(`⬇ <span class="accent">${ready.length} rota${ready.length > 1 ? 's' : ''}</span> exportada${ready.length > 1 ? 's' : ''}`);
+  const parts = [];
+  if (ready.length) parts.push(`${ready.length} rota${ready.length > 1 ? 's' : ''}`);
+  if (LD_INICIO_POINTS.length) parts.push(`${LD_INICIO_POINTS.length} ponto${LD_INICIO_POINTS.length > 1 ? 's' : ''} LD_INICIO_OAE`);
+  showToast(`⬇ <span class="accent">${parts.join(' + ')}</span> exportado(s)`);
 };

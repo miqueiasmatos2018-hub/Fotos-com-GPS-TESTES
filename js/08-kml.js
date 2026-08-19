@@ -361,6 +361,12 @@ function loadKmlFile(file, options = {}) {
         if (!options.skipDnitLookup) {
           runDnitLookupForLayer(parsed);
         }
+
+        // Scan for LD_INICIO / LD_INICIO_OAE points (yellow reference marker)
+        // and auto-fill both route names from this file's name — see 15-routes.js.
+        if (typeof registerRouteKmlDrop === 'function') {
+          registerRouteKmlDrop(parsed, file.name);
+        }
       }, 400);
 
     } catch (err) {

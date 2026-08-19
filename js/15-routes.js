@@ -15,12 +15,32 @@
 // or a paid provider (GraphHopper / ORS); nothing else here needs to change.
 const OSRM_SERVICE_URL = 'https://router.project-osrm.org/route/v1';
 
+// Each route's exported/displayed name is built as:
+//   PREFIX + "_" + <editable middle, optional> + "_" + <distance>KM
+// The prefix is fixed per route; the distance suffix is recalculated live
+// as the route is drawn/edited.
+const ROUTE_NAME_PREFIX = { a: 'ROTA_ALTERNATIVA', b: 'ROTA_ORIGINAL' };
+
 const ROUTES = {
-  a: { name: 'Rota 1', color: '#ff4d4d', waypoints: [], control: null, roadCoords: null },
-  b: { name: 'Rota 2', color: '#4dff88', waypoints: [], control: null, roadCoords: null }
+  a: { nameMiddle: '', distanceKm: 0, color: '#ff0000', waypoints: [], control: null, roadCoords: null },
+  b: { nameMiddle: '', distanceKm: 0, color: '#00ff00', waypoints: [], control: null, roadCoords: null }
 };
 
 function _routeSuffix(key) { return key === 'a' ? 'A' : 'B'; }
+
+// Builds the full composed name, e.g. "ROTA_ALTERNATIVA_Desvio_Centro_12.4KM"
+// (or "ROTA_ALTERNATIVA_12.4KM" if the editable middle is left blank).
+function _composeRouteName(key) {
+  const r = ROUTES[key];
+  const middle = r.nameMiddle.trim();
+  return `${ROUTE_NAME_PREFIX[key]}${middle ? '_' + middle : ''}_${r.distanceKm.toFixed(1)}KM`;
+}
+
+// Updates just the "_12.4KM" suffix label next to the editable name field.
+function _updateRouteSuffixDisplay(key) {
+  const el = document.getElementById('routeNameSuffix' + _routeSuffix(key));
+  if (el) el.textContent = `_${ROUTES[key].distanceKm.toFixed(1)}KM`;
+}
 
 // ─── BUILD / REBUILD THE ROUTING LINE ──────────────────────────────────────────
 function _rebuildRouteControl(key) {
@@ -32,6 +52,8 @@ function _rebuildRouteControl(key) {
   }
   if (r.waypoints.length < 2) {
     r.roadCoords = null;
+    r.distanceKm = 0;
+    _updateRouteSuffixDisplay(key);
     return;
   }
 
@@ -67,17 +89,21 @@ function _rebuildRouteControl(key) {
     _renderRouteStops(key);
   });
 
-  // Capture the actual road-snapped geometry for accurate KML export
-  // (not just straight lines between stops).
+  // Capture the actual road-snapped geometry (for KML export) and the
+  // driving distance (for the name suffix) from the resolved route.
   r.control.on('routesfound', e => {
     const best = e.routes && e.routes[0];
     if (best && best.coordinates) {
       r.roadCoords = best.coordinates.map(c => ({ lat: c.lat, lng: c.lng }));
     }
+    if (best && best.summary && typeof best.summary.totalDistance === 'number') {
+      r.distanceKm = best.summary.totalDistance / 1000;
+      _updateRouteSuffixDisplay(key);
+    }
   });
 
   r.control.on('routingerror', () => {
-    showToast(`⚠ Não foi possível calcular <span class="accent">${r.name}</span> — verifique a conexão`);
+    showToast(`⚠ Não foi possível calcular <span class="accent">${_composeRouteName(key)}</span> — verifique a conexão`);
   });
 }
 
@@ -125,20 +151,23 @@ function _renderRouteStops(key) {
   });
 }
 
-// ─── RENAME ─────────────────────────────────────────────────────────────────────
+// ─── RENAME (editable middle segment only — prefix/suffix are fixed/computed) ──
 window.renameRoute = function(key, value) {
-  ROUTES[key].name = value.trim() || (key === 'a' ? 'Rota 1' : 'Rota 2');
+  ROUTES[key].nameMiddle = value;
 };
 
 // ─── CLEAR ──────────────────────────────────────────────────────────────────────
 window.clearRoute = function(key) {
   if (_routePickingKey === key) window.toggleRoutePicking(key);
   const r = ROUTES[key];
+  const label = _composeRouteName(key);
   if (r.control) { map.removeControl(r.control); r.control = null; }
   r.waypoints  = [];
   r.roadCoords = null;
+  r.distanceKm = 0;
+  _updateRouteSuffixDisplay(key);
   _renderRouteStops(key);
-  showToast(`${r.name} <span class="accent">limpa</span>`);
+  showToast(`${label} <span class="accent">limpa</span>`);
 };
 
 // ─── CLICK-MAP-TO-ADD-STOP ────────────────────────────────────────────────────
@@ -175,7 +204,7 @@ window.toggleRoutePicking = function(key) {
   const r = ROUTES[key];
   if (btn) { btn.classList.add('active'); btn.textContent = '✕ Cancelar'; }
   if (banner) {
-    banner.textContent = `📍 Clique no mapa para adicionar parada em ${r.name} · ESC para cancelar`;
+    banner.textContent = `📍 Clique no mapa para adicionar parada em ${_composeRouteName(key)} · ESC para cancelar`;
     banner.classList.add('show');
   }
   map.getContainer().style.cursor = 'crosshair';
@@ -207,20 +236,20 @@ function _hexToKmlColor(hex, opacity) {
 }
 
 window.exportRoutesKML = function() {
-  const ready = Object.values(ROUTES).filter(r => r.waypoints.length >= 2);
+  const ready = Object.entries(ROUTES).filter(([, r]) => r.waypoints.length >= 2);
   if (!ready.length) {
     showToast('Adicione ao menos 2 paradas em uma rota antes de exportar');
     return;
   }
 
-  const placemarks = ready.map(r => {
+  const placemarks = ready.map(([key, r]) => {
     // Prefer the actual road-snapped geometry; fall back to straight lines
     // between stops if OSRM hasn't resolved yet (still exports something).
     const coords = (r.roadCoords && r.roadCoords.length >= 2) ? r.roadCoords : r.waypoints;
     const coordStr = coords.map(c => `${c.lng},${c.lat},0`).join(' ');
     const kmlColor = _hexToKmlColor(r.color, 1);
     return `  <Placemark>
-    <name>${_escapeXml(r.name)}</name>
+    <name>${_escapeXml(_composeRouteName(key))}</name>
     <Style><LineStyle><color>${kmlColor}</color><width>4</width></LineStyle></Style>
     <LineString><tessellate>1</tessellate><coordinates>${coordStr}</coordinates></LineString>
   </Placemark>`;

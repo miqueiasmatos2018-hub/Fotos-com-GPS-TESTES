@@ -145,11 +145,13 @@
     </div>
 
     <div class="tab-content" id="tabContentRotas">
-      <div class="route-panel" id="routePanelA" data-route="a" style="--route-color:#ff4d4d">
+      <div class="route-panel" id="routePanelA" data-route="a" style="--route-color:#ff0000">
         <div class="route-panel-header">
           <span class="route-color-dot"></span>
-          <input type="text" class="route-name-input" id="routeNameA" value="Rota 1"
-            spellcheck="false" placeholder="Nome da rota" oninput="renameRoute('a', this.value)">
+          <div class="route-name-compound">
+            <span class="route-name-prefix">ROTA_ALTERNATIVA_</span><input type="text" class="route-name-input" id="routeNameA" value=""
+              spellcheck="false" placeholder="trecho" oninput="renameRoute('a', this.value)"><span class="route-name-suffix" id="routeNameSuffixA">_0.0KM</span>
+          </div>
         </div>
         <div class="route-panel-toolbar">
           <button class="btn-add-ponto route-add-stop-btn" id="btnRouteAddA" onclick="toggleRoutePicking('a')">📍 Clicar no mapa</button>
@@ -159,11 +161,13 @@
         <div class="route-stops-list" id="routeStopsListA"></div>
       </div>
 
-      <div class="route-panel" id="routePanelB" data-route="b" style="--route-color:#4dff88">
+      <div class="route-panel" id="routePanelB" data-route="b" style="--route-color:#00ff00">
         <div class="route-panel-header">
           <span class="route-color-dot"></span>
-          <input type="text" class="route-name-input" id="routeNameB" value="Rota 2"
-            spellcheck="false" placeholder="Nome da rota" oninput="renameRoute('b', this.value)">
+          <div class="route-name-compound">
+            <span class="route-name-prefix">ROTA_ORIGINAL_</span><input type="text" class="route-name-input" id="routeNameB" value=""
+              spellcheck="false" placeholder="trecho" oninput="renameRoute('b', this.value)"><span class="route-name-suffix" id="routeNameSuffixB">_0.0KM</span>
+          </div>
         </div>
         <div class="route-panel-toolbar">
           <button class="btn-add-ponto route-add-stop-btn" id="btnRouteAddB" onclick="toggleRoutePicking('b')">📍 Clicar no mapa</button>

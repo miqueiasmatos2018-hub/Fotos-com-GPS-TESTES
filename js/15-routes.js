@@ -231,6 +231,39 @@ window.suggestAlternateRoute = function(key) {
   showToast(`${_composeRouteName(key)} — <span class="accent">opção ${r.selectedRouteIdx + 1} de ${r.allRoutes.length}</span>`);
 };
 
+// "🟢→🔴" toolbar button on the red route panel — copies the green route's
+// stops over to the red one and asks it for a *different* way to connect
+// them. If OSRM has more than one path for those same stops, this skips
+// straight past option 1 (which would just be identical to the green
+// route) and lands on option 2 instead, since the whole point is a
+// distinct alternative, not a duplicate of the original.
+window.useGreenRoutePoints = function() {
+  const src = ROUTES.b; // green / Rota Original
+  const dst = ROUTES.a; // red   / Rota Alternativa
+  if (!src.waypoints || src.waypoints.length < 2) {
+    showToast('Adicione ao menos 2 paradas na Rota Original (verde) primeiro');
+    return;
+  }
+  if (_routePickingKey) window.toggleRoutePicking(_routePickingKey);
+
+  dst.waypoints = src.waypoints.map(w => ({ lat: w.lat, lng: w.lng }));
+  _rebuildRouteControl('a');
+  _renderRouteStops('a');
+
+  if (dst.control) {
+    dst.control.once('routesfound', () => {
+      if (dst.allRoutes && dst.allRoutes.length > 1) {
+        dst.selectedRouteIdx = 1;
+        _applySelectedRoute('a');
+        _renderRouteAlternatives('a');
+        showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — sugerindo caminho alternativo`);
+      } else {
+        showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas (nenhum caminho alternativo encontrado)`);
+      }
+    });
+  }
+};
+
 // ─── SIDEBAR STOP LIST ──────────────────────────────────────────────────────────
 function _renderRouteStops(key) {
   const r = ROUTES[key];

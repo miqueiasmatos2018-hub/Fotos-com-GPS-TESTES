@@ -231,12 +231,47 @@ window.suggestAlternateRoute = function(key) {
   showToast(`${_composeRouteName(key)} — <span class="accent">opção ${r.selectedRouteIdx + 1} de ${r.allRoutes.length}</span>`);
 };
 
+// How much of one route's path physically coincides with another's, used to
+// judge whether an "alternative" actually takes different roads or just
+// happens to be listed second by OSRM while mostly retracing the same
+// streets. Samples points along routeA and checks, for each, whether a
+// point on routeB lies within `thresholdKm` of it -- the fraction that do
+// is the overlap. Sampling (not every point) keeps this fast even for long
+// routes with thousands of coordinates.
+function _sampleCoords(coords, maxSamples) {
+  if (coords.length <= maxSamples) return coords;
+  const step = coords.length / maxSamples;
+  const out = [];
+  for (let i = 0; i < maxSamples; i++) out.push(coords[Math.floor(i * step)]);
+  return out;
+}
+
+function _routeOverlapFraction(coordsA, coordsB, thresholdKm) {
+  if (!coordsA.length || !coordsB.length) return 0;
+  const sampleA = _sampleCoords(coordsA, 60);
+  const sampleB = _sampleCoords(coordsB, 200);
+  let close = 0;
+  for (const pa of sampleA) {
+    let minD = Infinity;
+    for (const pb of sampleB) {
+      const d = _haversineKm(pa.lat, pa.lng, pb.lat, pb.lng);
+      if (d < minD) minD = d;
+      if (minD < thresholdKm) break; // already close enough, stop early
+    }
+    if (minD < thresholdKm) close++;
+  }
+  return close / sampleA.length;
+}
+
 // "🟢→🔴" toolbar button on the red route panel — copies the green route's
-// stops over to the red one and asks it for a *different* way to connect
-// them. If OSRM has more than one path for those same stops, this skips
-// straight past option 1 (which would just be identical to the green
-// route) and lands on option 2 instead, since the whole point is a
-// distinct alternative, not a duplicate of the original.
+// stops over to the red one, then picks whichever alternative genuinely
+// takes different roads from green (comparing actual path geometry, not
+// just OSRM's listing order) and, among those that do, the shortest/closest
+// one. Falls back to whichever option overlaps the least if none diverge
+// enough to be considered "really different."
+const ROUTE_OVERLAP_THRESHOLD_KM = 0.15; // ~150m: closer than this counts as "same road"
+const ROUTE_DIFFERENT_ENOUGH = 0.5;      // less than 50% of the path may overlap with green
+
 window.useGreenRoutePoints = function() {
   const src = ROUTES.b; // green / Rota Original
   const dst = ROUTES.a; // red   / Rota Alternativa
@@ -246,22 +281,57 @@ window.useGreenRoutePoints = function() {
   }
   if (_routePickingKey) window.toggleRoutePicking(_routePickingKey);
 
+  const greenCoords = src.roadCoords; // green's actual resolved road geometry
   dst.waypoints = src.waypoints.map(w => ({ lat: w.lat, lng: w.lng }));
   _rebuildRouteControl('a');
   _renderRouteStops('a');
 
-  if (dst.control) {
-    dst.control.once('routesfound', () => {
-      if (dst.allRoutes && dst.allRoutes.length > 1) {
-        dst.selectedRouteIdx = 1;
-        _applySelectedRoute('a');
-        _renderRouteAlternatives('a');
-        showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — sugerindo caminho alternativo`);
-      } else {
-        showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas (nenhum caminho alternativo encontrado)`);
-      }
+  if (!dst.control) return;
+
+  dst.control.once('routesfound', () => {
+    if (!dst.allRoutes || dst.allRoutes.length < 2) {
+      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas (nenhum caminho alternativo encontrado)`);
+      return;
+    }
+
+    if (!greenCoords || greenCoords.length < 2) {
+      // Can't compare geometry (green hasn't resolved yet) -- best we can
+      // do is take OSRM's second-listed option.
+      dst.selectedRouteIdx = 1;
+      _applySelectedRoute('a');
+      _renderRouteAlternatives('a');
+      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — sugerindo caminho alternativo`);
+      return;
+    }
+
+    const scored = dst.allRoutes.map((rt, i) => {
+      const coords = (rt.coordinates || []).map(c => ({ lat: c.lat, lng: c.lng }));
+      const overlap = _routeOverlapFraction(coords, greenCoords, ROUTE_OVERLAP_THRESHOLD_KM);
+      const km = rt.summary && typeof rt.summary.totalDistance === 'number'
+        ? rt.summary.totalDistance / 1000 : Infinity;
+      return { i, overlap, km };
     });
-  }
+
+    // Prefer routes that meaningfully diverge from green; among those,
+    // pick the shortest ("closest") one. If nothing diverges enough,
+    // fall back to whichever overlaps the least.
+    let candidates = scored.filter(s => s.overlap < ROUTE_DIFFERENT_ENOUGH);
+    candidates = candidates.length
+      ? candidates.sort((a, b) => a.km - b.km)
+      : [...scored].sort((a, b) => a.overlap - b.overlap).slice(0, 1);
+
+    const chosen = candidates[0];
+    dst.selectedRouteIdx = chosen.i;
+    _applySelectedRoute('a');
+    _renderRouteAlternatives('a');
+
+    if (chosen.overlap < ROUTE_DIFFERENT_ENOUGH) {
+      const pct = Math.round((1 - chosen.overlap) * 100);
+      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — caminho ${pct}% diferente da Rota Original`);
+    } else {
+      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — nenhum caminho muito diferente encontrado, usando o mais distinto disponível`);
+    }
+  });
 };
 
 // ─── SIDEBAR STOP LIST ──────────────────────────────────────────────────────────

@@ -346,7 +346,7 @@ function _routeOverlapFraction(coordsA, coordsB, thresholdKm) {
 // 3-stop route (start, the detour via-point, end) that can still be
 // dragged/edited like any other.
 const ROUTE_OVERLAP_THRESHOLD_KM = 0.15; // ~150m: closer than this counts as "same road"
-const ROUTE_DIFFERENT_ENOUGH = 0.5;      // less than 50% of the path may overlap with green
+const ROUTE_DIFFERENT_ENOUGH = 0.1;      // less than 10% of the path may overlap with green
 
 function _perpendicularOffsetPoint(first, last, offsetKm, side) {
   const midLat = (first.lat + last.lat) / 2;
@@ -418,7 +418,7 @@ window.useGreenRoutePoints = async function() {
   // Try progressively wider detours, on both sides of the direct line,
   // until one both clears far enough away from green's road AND stays on
   // federal/state highways.
-  const offsetFractions = [0.25, 0.45, 0.7];
+  const offsetFractions = [0.25, 0.45, 0.7, 1.0];
   let best = null;
 
   for (const frac of offsetFractions) {

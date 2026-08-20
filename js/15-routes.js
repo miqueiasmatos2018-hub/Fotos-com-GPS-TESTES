@@ -15,6 +15,58 @@
 // or a paid provider (GraphHopper / ORS); nothing else here needs to change.
 const OSRM_SERVICE_URL = 'https://router.project-osrm.org/route/v1';
 
+// ── HIGHWAY CLASSIFICATION ──────────────────────────────────────────────────
+// The routes here must stay on federal (BR-xxx) or state (UF-xxx, e.g.
+// SP-330, MG-050) highways. IMPORTANT LIMITATION: the free public OSRM demo
+// server has no parameter to actually *restrict* routing to only those road
+// classes -- that would need a custom-configured routing server, which is
+// outside what a keyless/free setup can do. What this DOES do reliably:
+// OSRM returns the name/ref of the road used for each turn-by-turn step, so
+// after a route is calculated, its steps are checked against known BR-/UF-
+// highway numbering and the fraction of the trip's distance that's on a
+// recognized highway is computed. That fraction then drives route selection
+// (prefer/require routes that stay on highways) and warnings (flag routes
+// that can't avoid local roads) throughout this file.
+const BR_UF_CODES = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG',
+  'PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
+const HIGHWAY_REF_RE = new RegExp(`\\b(?:BR|${BR_UF_CODES.join('|')})[-\\s]?\\d{2,4}\\b`, 'i');
+const HIGHWAY_FRACTION_MIN = 0.7; // require/prefer at least 70% of distance on BR-/UF- roads
+
+function _isHighwayName(name) {
+  return !!(name && HIGHWAY_REF_RE.test(name));
+}
+
+// Distance-weighted fraction (0-1) of a raw OSRM route response that runs on
+// a recognized federal/state highway, using each turn-by-turn step's own
+// road name and distance (steps=true in the request below).
+function _highwayFractionFromRoute(osrmRoute) {
+  if (!osrmRoute || !osrmRoute.legs) return null;
+  let total = 0, onHighway = 0;
+  for (const leg of osrmRoute.legs) {
+    for (const step of (leg.steps || [])) {
+      const dist = step.distance || 0;
+      total += dist;
+      if (_isHighwayName(step.name)) onHighway += dist;
+    }
+  }
+  return total > 0 ? onHighway / total : null;
+}
+
+// Raw OSRM fetch (bypassing the Leaflet Routing Machine control) purely to
+// check which roads a set of waypoints would actually use.
+async function _fetchOsrmHighwayFraction(points) {
+  const coordStr = points.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM_SERVICE_URL}/driving/${coordStr}?overview=false&steps=true`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    return _highwayFractionFromRoute(data.routes && data.routes[0]);
+  } catch (err) {
+    console.error('OSRM highway-classification fetch failed:', err);
+    return null;
+  }
+}
+
 // Each route's exported/displayed name is built as:
 //   PREFIX + "_" + <editable middle, optional> + "_" + <distance>KM
 // The prefix is fixed per route; the distance suffix is recalculated live
@@ -23,9 +75,9 @@ const ROUTE_NAME_PREFIX = { a: 'ROTA_ALTERNATIVA', b: 'ROTA_ORIGINAL' };
 
 const ROUTES = {
   a: { nameMiddle: '', distanceKm: 0, color: '#ff0000', waypoints: [], control: null, roadCoords: null,
-       allRoutes: [], selectedRouteIdx: 0, previewLine: null },
+       allRoutes: [], selectedRouteIdx: 0, previewLine: null, highwayFraction: null },
   b: { nameMiddle: '', distanceKm: 0, color: '#00ff00', waypoints: [], control: null, roadCoords: null,
-       allRoutes: [], selectedRouteIdx: 0, previewLine: null }
+       allRoutes: [], selectedRouteIdx: 0, previewLine: null, highwayFraction: null }
 };
 
 function _routeSuffix(key) { return key === 'a' ? 'A' : 'B'; }
@@ -147,6 +199,17 @@ function _rebuildRouteControl(key) {
     r.selectedRouteIdx = 0;
     _applySelectedRoute(key);
     _renderRouteAlternatives(key);
+
+    // Best-effort highway check (see the note at the top of this file on
+    // why this can only warn, not force the routing engine itself).
+    _fetchOsrmHighwayFraction(r.waypoints).then(frac => {
+      if (frac == null) return;
+      r.highwayFraction = frac;
+      if (frac < HIGHWAY_FRACTION_MIN) {
+        const pct = Math.round(frac * 100);
+        showToast(`⚠ ${_composeRouteName(key)}: apenas <span class="accent">${pct}%</span> do trajeto está em vias federais/estaduais`);
+      }
+    });
   });
 
   r.control.on('routingerror', () => {
@@ -303,7 +366,7 @@ function _perpendicularOffsetPoint(first, last, offsetKm, side) {
 
 async function _fetchOsrmRoute(points) {
   const coordStr = points.map(p => `${p.lng},${p.lat}`).join(';');
-  const url = `${OSRM_SERVICE_URL}/driving/${coordStr}?overview=full&geometries=geojson`;
+  const url = `${OSRM_SERVICE_URL}/driving/${coordStr}?overview=full&geometries=geojson&steps=true`;
   try {
     const res = await fetch(url);
     const data = await res.json();
@@ -311,7 +374,8 @@ async function _fetchOsrmRoute(points) {
     const rt = data.routes[0];
     return {
       coords: rt.geometry.coordinates.map(c => ({ lat: c[1], lng: c[0] })), // geojson is [lng,lat]
-      distanceKm: rt.distance / 1000
+      distanceKm: rt.distance / 1000,
+      highwayFraction: _highwayFractionFromRoute(rt) // reuses the same response, no extra request
     };
   } catch (err) {
     console.error('OSRM detour route fetch failed:', err);
@@ -337,10 +401,23 @@ window.useGreenRoutePoints = async function() {
   const last  = src.waypoints[src.waypoints.length - 1];
   const straightKm = _haversineKm(first.lat, first.lng, last.lat, last.lng);
 
-  showToast('🔎 Procurando um desvio pela estrada…');
+  showToast('🔎 Procurando um desvio por vias estaduais/federais…');
+
+  // Ranks a candidate by two requirements together: does it genuinely
+  // diverge from green's road, AND does it stay mostly on recognized
+  // federal/state highways. 0 = meets both (best), 3 = meets neither.
+  function _candidateTier(c) {
+    const diverges  = c.overlap < ROUTE_DIFFERENT_ENOUGH;
+    const onHighway = c.highwayFraction == null || c.highwayFraction >= HIGHWAY_FRACTION_MIN;
+    if (diverges && onHighway) return 0;
+    if (diverges) return 1;
+    if (onHighway) return 2;
+    return 3;
+  }
 
   // Try progressively wider detours, on both sides of the direct line,
-  // until one clears far enough away from green's actual road.
+  // until one both clears far enough away from green's road AND stays on
+  // federal/state highways.
   const offsetFractions = [0.25, 0.45, 0.7];
   let best = null;
 
@@ -352,18 +429,20 @@ window.useGreenRoutePoints = async function() {
       if (!result) continue;
 
       const overlap = _routeOverlapFraction(result.coords, greenCoords, ROUTE_OVERLAP_THRESHOLD_KM);
-      const candidate = { via, coords: result.coords, distanceKm: result.distanceKm, overlap };
+      const candidate = {
+        via, coords: result.coords, distanceKm: result.distanceKm,
+        overlap, highwayFraction: result.highwayFraction
+      };
 
       if (!best) { best = candidate; continue; }
-      const bestQualifies = best.overlap < ROUTE_DIFFERENT_ENOUGH;
-      const candQualifies = candidate.overlap < ROUTE_DIFFERENT_ENOUGH;
-      if (candQualifies && !bestQualifies) best = candidate;
-      else if (candQualifies && bestQualifies && candidate.distanceKm < best.distanceKm) best = candidate;
-      else if (!candQualifies && !bestQualifies && candidate.overlap < best.overlap) best = candidate;
+      const candTier = _candidateTier(candidate);
+      const bestTier = _candidateTier(best);
+      if (candTier < bestTier) best = candidate;
+      else if (candTier === bestTier && candidate.distanceKm < best.distanceKm) best = candidate;
     }
-    // Stop widening the search as soon as a qualifying detour is found —
-    // no need to push further out (and further from "closest") than needed.
-    if (best && best.overlap < ROUTE_DIFFERENT_ENOUGH) break;
+    // Stop widening the search as soon as a fully-qualifying detour (tier 0)
+    // is found — no need to push further out than needed.
+    if (best && _candidateTier(best) === 0) break;
   }
 
   if (!best) {
@@ -380,10 +459,16 @@ window.useGreenRoutePoints = async function() {
   _renderRouteStops('a');
 
   const pct = Math.round((1 - best.overlap) * 100);
-  if (best.overlap < ROUTE_DIFFERENT_ENOUGH) {
-    showToast(`Desvio encontrado — <span class="accent">${pct}%</span> diferente da Rota Original (${best.distanceKm.toFixed(1)}km)`);
+  const hwPct = best.highwayFraction != null ? Math.round(best.highwayFraction * 100) : null;
+  const tier = _candidateTier(best);
+  if (tier === 0) {
+    showToast(`Desvio encontrado — <span class="accent">${pct}%</span> diferente${hwPct != null ? `, ${hwPct}% em vias estaduais/federais` : ''} (${best.distanceKm.toFixed(1)}km)`);
+  } else if (tier === 1) {
+    showToast(`⚠ Desvio ${pct}% diferente, mas só <span class="accent">${hwPct}%</span> do trajeto está em vias estaduais/federais`);
+  } else if (tier === 2) {
+    showToast(`⚠ Desvio majoritariamente em vias estaduais/federais, mas pouco diferente da Rota Original (${pct}%)`);
   } else {
-    showToast(`⚠ Nenhum desvio totalmente diferente encontrado — usando o mais distinto disponível (${pct}% diferente)`);
+    showToast('⚠ Nenhum desvio ideal encontrado — usando o mais próximo disponível');
   }
 };
 
@@ -448,6 +533,7 @@ window.clearRoute = function(key) {
   r.distanceKm = 0;
   r.allRoutes = [];
   r.selectedRouteIdx = 0;
+  r.highwayFraction = null;
   _updateRouteSuffixDisplay(key);
   _renderRouteStops(key);
   _renderRouteAlternatives(key);

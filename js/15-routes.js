@@ -263,80 +263,128 @@ function _routeOverlapFraction(coordsA, coordsB, thresholdKm) {
   return close / sampleA.length;
 }
 
-// "🟢→🔴" toolbar button on the red route panel — takes only the FIRST and
-// LAST point of the green route (not its intermediate stops) and asks OSRM
-// for a way to connect just those two that genuinely takes different roads
-// from green. Deliberately dropping the intermediate stops matters: if they
-// were copied too, any "alternative" would still be forced back onto the
-// same road near each one, which defeats the purpose of a detour route in
-// case part of the green road is blocked or impassable. Among the paths
-// that do diverge enough, picks the shortest ("closest") one; if none
-// diverge enough, falls back to whichever available option overlaps least.
+// "🟢→🔴" toolbar button on the red route panel — forces a genuine detour
+// between the FIRST and LAST point of the green route (not its intermediate
+// stops, and not just asking OSRM for "alternatives").
+//
+// OSRM's built-in alternatives feature turned out to not be enough here: for
+// a route spanning any real distance, it usually only offers minor local
+// variations (a different street for a few blocks), not a route through a
+// different area entirely -- which is what an actual detour needs to be
+// useful if part of the green road is blocked or impassable.
+//
+// So instead, this tries routing through an artificial via-point offset to
+// one side of the direct line between start and end, at a few different
+// distances and on both sides, actually forcing the road network to be
+// searched elsewhere. Each candidate's real road geometry is compared
+// against green's actual path (not just its waypoints) to measure how much
+// they truly overlap; whichever candidate diverges enough from green (and
+// among those, is shortest) becomes the new red route -- as a normal
+// 3-stop route (start, the detour via-point, end) that can still be
+// dragged/edited like any other.
 const ROUTE_OVERLAP_THRESHOLD_KM = 0.15; // ~150m: closer than this counts as "same road"
 const ROUTE_DIFFERENT_ENOUGH = 0.5;      // less than 50% of the path may overlap with green
 
-window.useGreenRoutePoints = function() {
+function _perpendicularOffsetPoint(first, last, offsetKm, side) {
+  const midLat = (first.lat + last.lat) / 2;
+  const midLng = (first.lng + last.lng) / 2;
+  const dLat = last.lat - first.lat;
+  const dLng = last.lng - first.lng;
+  const len = Math.sqrt(dLat * dLat + dLng * dLng) || 1e-9;
+  const perpLat = -dLng / len;
+  const perpLng =  dLat / len;
+  const kmPerDegLat = 111.0;
+  const kmPerDegLng = 111.0 * Math.cos(midLat * Math.PI / 180) || 1e-9;
+  return {
+    lat: midLat + side * perpLat * (offsetKm / kmPerDegLat),
+    lng: midLng + side * perpLng * (offsetKm / kmPerDegLng)
+  };
+}
+
+async function _fetchOsrmRoute(points) {
+  const coordStr = points.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM_SERVICE_URL}/driving/${coordStr}?overview=full&geometries=geojson`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.routes || !data.routes.length) return null;
+    const rt = data.routes[0];
+    return {
+      coords: rt.geometry.coordinates.map(c => ({ lat: c[1], lng: c[0] })), // geojson is [lng,lat]
+      distanceKm: rt.distance / 1000
+    };
+  } catch (err) {
+    console.error('OSRM detour route fetch failed:', err);
+    return null;
+  }
+}
+
+window.useGreenRoutePoints = async function() {
   const src = ROUTES.b; // green / Rota Original
   const dst = ROUTES.a; // red   / Rota Alternativa
   if (!src.waypoints || src.waypoints.length < 2) {
     showToast('Defina ao menos o início e o fim da Rota Original (verde) primeiro');
     return;
   }
+  const greenCoords = src.roadCoords; // green's actual resolved road geometry
+  if (!greenCoords || greenCoords.length < 2) {
+    showToast('Aguarde a Rota Original terminar de calcular antes de pedir um desvio');
+    return;
+  }
   if (_routePickingKey) window.toggleRoutePicking(_routePickingKey);
 
-  const greenCoords = src.roadCoords; // green's actual resolved road geometry
   const first = src.waypoints[0];
   const last  = src.waypoints[src.waypoints.length - 1];
-  dst.waypoints = [{ lat: first.lat, lng: first.lng }, { lat: last.lat, lng: last.lng }];
+  const straightKm = _haversineKm(first.lat, first.lng, last.lat, last.lng);
+
+  showToast('🔎 Procurando um desvio pela estrada…');
+
+  // Try progressively wider detours, on both sides of the direct line,
+  // until one clears far enough away from green's actual road.
+  const offsetFractions = [0.25, 0.45, 0.7];
+  let best = null;
+
+  for (const frac of offsetFractions) {
+    const offsetKm = Math.max(straightKm * frac, 5); // never less than a 5km push
+    for (const side of [1, -1]) {
+      const via = _perpendicularOffsetPoint(first, last, offsetKm, side);
+      const result = await _fetchOsrmRoute([first, via, last]);
+      if (!result) continue;
+
+      const overlap = _routeOverlapFraction(result.coords, greenCoords, ROUTE_OVERLAP_THRESHOLD_KM);
+      const candidate = { via, coords: result.coords, distanceKm: result.distanceKm, overlap };
+
+      if (!best) { best = candidate; continue; }
+      const bestQualifies = best.overlap < ROUTE_DIFFERENT_ENOUGH;
+      const candQualifies = candidate.overlap < ROUTE_DIFFERENT_ENOUGH;
+      if (candQualifies && !bestQualifies) best = candidate;
+      else if (candQualifies && bestQualifies && candidate.distanceKm < best.distanceKm) best = candidate;
+      else if (!candQualifies && !bestQualifies && candidate.overlap < best.overlap) best = candidate;
+    }
+    // Stop widening the search as soon as a qualifying detour is found —
+    // no need to push further out (and further from "closest") than needed.
+    if (best && best.overlap < ROUTE_DIFFERENT_ENOUGH) break;
+  }
+
+  if (!best) {
+    showToast('⚠ Não foi possível calcular um desvio (sem conexão com o serviço de rotas?)');
+    return;
+  }
+
+  dst.waypoints = [
+    { lat: first.lat, lng: first.lng },
+    { lat: best.via.lat, lng: best.via.lng },
+    { lat: last.lat, lng: last.lng }
+  ];
   _rebuildRouteControl('a');
   _renderRouteStops('a');
 
-  if (!dst.control) return;
-
-  dst.control.once('routesfound', () => {
-    if (!dst.allRoutes || dst.allRoutes.length < 2) {
-      showToast('Nenhum caminho alternativo encontrado entre o início e o fim da Rota Original');
-      return;
-    }
-
-    if (!greenCoords || greenCoords.length < 2) {
-      // Can't compare geometry (green hasn't resolved yet) -- best we can
-      // do is take OSRM's second-listed option.
-      dst.selectedRouteIdx = 1;
-      _applySelectedRoute('a');
-      _renderRouteAlternatives('a');
-      showToast('Sugerindo caminho alternativo entre início/fim da Rota Original');
-      return;
-    }
-
-    const scored = dst.allRoutes.map((rt, i) => {
-      const coords = (rt.coordinates || []).map(c => ({ lat: c.lat, lng: c.lng }));
-      const overlap = _routeOverlapFraction(coords, greenCoords, ROUTE_OVERLAP_THRESHOLD_KM);
-      const km = rt.summary && typeof rt.summary.totalDistance === 'number'
-        ? rt.summary.totalDistance / 1000 : Infinity;
-      return { i, overlap, km };
-    });
-
-    // Prefer routes that meaningfully diverge from green; among those,
-    // pick the shortest ("closest") one. If nothing diverges enough,
-    // fall back to whichever overlaps the least.
-    let candidates = scored.filter(s => s.overlap < ROUTE_DIFFERENT_ENOUGH);
-    candidates = candidates.length
-      ? candidates.sort((a, b) => a.km - b.km)
-      : [...scored].sort((a, b) => a.overlap - b.overlap).slice(0, 1);
-
-    const chosen = candidates[0];
-    dst.selectedRouteIdx = chosen.i;
-    _applySelectedRoute('a');
-    _renderRouteAlternatives('a');
-
-    const pct = Math.round((1 - chosen.overlap) * 100);
-    if (chosen.overlap < ROUTE_DIFFERENT_ENOUGH) {
-      showToast(`Caminho alternativo encontrado — <span class="accent">${pct}%</span> diferente da Rota Original`);
-    } else {
-      showToast(`⚠ Nenhum caminho muito diferente encontrado — usando o mais distinto disponível (${pct}% diferente)`);
-    }
-  });
+  const pct = Math.round((1 - best.overlap) * 100);
+  if (best.overlap < ROUTE_DIFFERENT_ENOUGH) {
+    showToast(`Desvio encontrado — <span class="accent">${pct}%</span> diferente da Rota Original (${best.distanceKm.toFixed(1)}km)`);
+  } else {
+    showToast(`⚠ Nenhum desvio totalmente diferente encontrado — usando o mais distinto disponível (${pct}% diferente)`);
+  }
 };
 
 // ─── SIDEBAR STOP LIST ──────────────────────────────────────────────────────────

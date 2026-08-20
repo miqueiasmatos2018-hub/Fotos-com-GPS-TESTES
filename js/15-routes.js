@@ -109,7 +109,7 @@ function _rebuildRouteControl(key) {
 
   r.control = L.Routing.control({
     waypoints: r.waypoints.map(w => L.latLng(w.lat, w.lng)),
-    router: L.Routing.osrmv1({ serviceUrl: OSRM_SERVICE_URL, profile: 'driving', alternatives: true }),
+    router: L.Routing.osrmv1({ serviceUrl: OSRM_SERVICE_URL, profile: 'driving', alternatives: 3 }),
     lineOptions: {
       styles: [{ color: r.color, weight: 5, opacity: 0.85 }],
       addWaypoints: true // dragging the line inserts a new stop, like My Maps
@@ -263,12 +263,15 @@ function _routeOverlapFraction(coordsA, coordsB, thresholdKm) {
   return close / sampleA.length;
 }
 
-// "🟢→🔴" toolbar button on the red route panel — copies the green route's
-// stops over to the red one, then picks whichever alternative genuinely
-// takes different roads from green (comparing actual path geometry, not
-// just OSRM's listing order) and, among those that do, the shortest/closest
-// one. Falls back to whichever option overlaps the least if none diverge
-// enough to be considered "really different."
+// "🟢→🔴" toolbar button on the red route panel — takes only the FIRST and
+// LAST point of the green route (not its intermediate stops) and asks OSRM
+// for a way to connect just those two that genuinely takes different roads
+// from green. Deliberately dropping the intermediate stops matters: if they
+// were copied too, any "alternative" would still be forced back onto the
+// same road near each one, which defeats the purpose of a detour route in
+// case part of the green road is blocked or impassable. Among the paths
+// that do diverge enough, picks the shortest ("closest") one; if none
+// diverge enough, falls back to whichever available option overlaps least.
 const ROUTE_OVERLAP_THRESHOLD_KM = 0.15; // ~150m: closer than this counts as "same road"
 const ROUTE_DIFFERENT_ENOUGH = 0.5;      // less than 50% of the path may overlap with green
 
@@ -276,13 +279,15 @@ window.useGreenRoutePoints = function() {
   const src = ROUTES.b; // green / Rota Original
   const dst = ROUTES.a; // red   / Rota Alternativa
   if (!src.waypoints || src.waypoints.length < 2) {
-    showToast('Adicione ao menos 2 paradas na Rota Original (verde) primeiro');
+    showToast('Defina ao menos o início e o fim da Rota Original (verde) primeiro');
     return;
   }
   if (_routePickingKey) window.toggleRoutePicking(_routePickingKey);
 
   const greenCoords = src.roadCoords; // green's actual resolved road geometry
-  dst.waypoints = src.waypoints.map(w => ({ lat: w.lat, lng: w.lng }));
+  const first = src.waypoints[0];
+  const last  = src.waypoints[src.waypoints.length - 1];
+  dst.waypoints = [{ lat: first.lat, lng: first.lng }, { lat: last.lat, lng: last.lng }];
   _rebuildRouteControl('a');
   _renderRouteStops('a');
 
@@ -290,7 +295,7 @@ window.useGreenRoutePoints = function() {
 
   dst.control.once('routesfound', () => {
     if (!dst.allRoutes || dst.allRoutes.length < 2) {
-      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas (nenhum caminho alternativo encontrado)`);
+      showToast('Nenhum caminho alternativo encontrado entre o início e o fim da Rota Original');
       return;
     }
 
@@ -300,7 +305,7 @@ window.useGreenRoutePoints = function() {
       dst.selectedRouteIdx = 1;
       _applySelectedRoute('a');
       _renderRouteAlternatives('a');
-      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — sugerindo caminho alternativo`);
+      showToast('Sugerindo caminho alternativo entre início/fim da Rota Original');
       return;
     }
 
@@ -325,11 +330,11 @@ window.useGreenRoutePoints = function() {
     _applySelectedRoute('a');
     _renderRouteAlternatives('a');
 
+    const pct = Math.round((1 - chosen.overlap) * 100);
     if (chosen.overlap < ROUTE_DIFFERENT_ENOUGH) {
-      const pct = Math.round((1 - chosen.overlap) * 100);
-      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — caminho ${pct}% diferente da Rota Original`);
+      showToast(`Caminho alternativo encontrado — <span class="accent">${pct}%</span> diferente da Rota Original`);
     } else {
-      showToast(`<span class="accent">${src.waypoints.length}</span> paradas copiadas — nenhum caminho muito diferente encontrado, usando o mais distinto disponível`);
+      showToast(`⚠ Nenhum caminho muito diferente encontrado — usando o mais distinto disponível (${pct}% diferente)`);
     }
   });
 };

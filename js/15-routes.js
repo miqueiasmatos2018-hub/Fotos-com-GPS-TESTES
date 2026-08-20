@@ -67,7 +67,32 @@ async function _fetchOsrmHighwayFraction(points) {
   }
 }
 
-// Each route's exported/displayed name is built as:
+// Debounced per-route wrapper around the highway check above. Only warns
+// when the fraction is genuinely known and below the threshold, and only
+// once the route has settled (see the call site in _rebuildRouteControl).
+const _highwayCheckDebounced = {
+  a: debounce(() => _runHighwayCheck('a'), 700),
+  b: debounce(() => _runHighwayCheck('b'), 700)
+};
+
+function _scheduleHighwayCheck(key) {
+  const fn = _highwayCheckDebounced[key];
+  if (fn) fn();
+}
+
+async function _runHighwayCheck(key) {
+  const r = ROUTES[key];
+  if (!r || !r.waypoints || r.waypoints.length < 2) return;
+  const frac = await _fetchOsrmHighwayFraction(r.waypoints);
+  if (frac == null) return;
+  r.highwayFraction = frac;
+  if (frac < HIGHWAY_FRACTION_MIN) {
+    const pct = Math.round(frac * 100);
+    showToast(`⚠ ${_composeRouteName(key)}: apenas <span class="accent">${pct}%</span> do trajeto está em vias federais/estaduais`);
+  }
+}
+
+
 //   PREFIX + "_" + <editable middle, optional> + "_" + <distance>KM
 // The prefix is fixed per route; the distance suffix is recalculated live
 // as the route is drawn/edited.
@@ -110,9 +135,18 @@ function _extractLdInicioPointsFromKml(parsedLayer) {
 //     BOTH route names.
 function registerRouteKmlDrop(parsedLayer, fileName) {
   const points = _extractLdInicioPointsFromKml(parsedLayer);
-  points.forEach(p => LD_INICIO_POINTS.push({ lat: p.lat, lng: p.lng }));
-  if (points.length) {
-    showToast(`📍 <span class="accent">${points.length}</span> ponto${points.length > 1 ? 's' : ''} LD_INICIO_OAE identificado${points.length > 1 ? 's' : ''}`);
+
+  // De-duplicate: dropping the same KML twice (or re-dropping a corrected
+  // version) would otherwise stack identical points and emit each of them
+  // repeatedly in the exported KML.
+  let added = 0;
+  for (const p of points) {
+    const dup = LD_INICIO_POINTS.some(e =>
+      Math.abs(e.lat - p.lat) < 1e-7 && Math.abs(e.lng - p.lng) < 1e-7);
+    if (!dup) { LD_INICIO_POINTS.push({ lat: p.lat, lng: p.lng }); added++; }
+  }
+  if (added) {
+    showToast(`📍 <span class="accent">${added}</span> ponto${added > 1 ? 's' : ''} LD_INICIO_OAE identificado${added > 1 ? 's' : ''}`);
   }
 
   const base = fileName.replace(/\.(kml|kmz)$/i, '');
@@ -202,14 +236,10 @@ function _rebuildRouteControl(key) {
 
     // Best-effort highway check (see the note at the top of this file on
     // why this can only warn, not force the routing engine itself).
-    _fetchOsrmHighwayFraction(r.waypoints).then(frac => {
-      if (frac == null) return;
-      r.highwayFraction = frac;
-      if (frac < HIGHWAY_FRACTION_MIN) {
-        const pct = Math.round(frac * 100);
-        showToast(`⚠ ${_composeRouteName(key)}: apenas <span class="accent">${pct}%</span> do trajeto está em vias federais/estaduais`);
-      }
-    });
+    // Debounced: routeWhileDragging makes 'routesfound' fire continuously
+    // while a stop is being dragged, and firing an extra OSRM request per
+    // frame would hammer the rate-limited public server (and spam toasts).
+    _scheduleHighwayCheck(key);
   });
 
   r.control.on('routingerror', () => {
@@ -224,6 +254,15 @@ function _rebuildRouteControl(key) {
 // preview of that alternate path so it's visible on the map too.
 function _applySelectedRoute(key) {
   const r = ROUTES[key];
+
+  // Clear any previous dashed preview first -- doing this before the
+  // early-return below matters, otherwise a stale preview from a previous
+  // selection stays stranded on the map when the new one has no geometry.
+  if (r.previewLine) {
+    map.removeLayer(r.previewLine);
+    r.previewLine = null;
+  }
+
   const chosen = r.allRoutes && r.allRoutes[r.selectedRouteIdx];
   if (!chosen || !chosen.coordinates) return;
 
@@ -233,10 +272,6 @@ function _applySelectedRoute(key) {
     _updateRouteSuffixDisplay(key);
   }
 
-  if (r.previewLine) {
-    map.removeLayer(r.previewLine);
-    r.previewLine = null;
-  }
   if (r.selectedRouteIdx !== 0) {
     r.previewLine = L.polyline(
       r.roadCoords.map(c => [c.lat, c.lng]),

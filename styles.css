@@ -522,6 +522,33 @@
 
   .route-export-btn { flex-shrink: 0; }
 
+  .route-alternatives {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+  }
+  .route-alt-btn {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    color: var(--text2);
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.3px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .route-alt-btn:hover { border-color: var(--route-color, var(--accent)); color: var(--text); }
+  .route-alt-btn.active {
+    background: var(--route-color, var(--accent));
+    border-color: var(--route-color, var(--accent));
+    color: #0a0a0a;
+    font-weight: 700;
+  }
+
   /* Leaflet Routing Machine draws its own itinerary/turn-by-turn text panel
      on the map by default -- we use our own sidebar stop list instead, so
      hide it. The route line + draggable stop markers it also draws stay

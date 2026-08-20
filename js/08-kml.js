@@ -59,6 +59,7 @@ mapContainer.addEventListener('drop', e => {
 
 // ─── DNIT ROUTE LOOKUP (LD_INICIO / LD_INICIO_OAE points) ─────────────────────
 let _dnitRowSeq = 0;
+let _epocaRowSeq = 0;
 
 function getTodayDnitDateParam() {
   const d = new Date();

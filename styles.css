@@ -449,6 +449,24 @@
     padding: 8px 10px;
   }
   .route-add-stop-btn { flex: 1; }
+
+  .route-from-green-btn {
+    display: block;
+    width: calc(100% - 20px);
+    margin: 0 10px 8px;
+    background: rgba(0,255,0,0.06);
+    border: 1px dashed rgba(0,255,0,0.35);
+    color: var(--text2);
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.3px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .route-from-green-btn:hover { color: var(--text); border-color: #00ff00; background: rgba(0,255,0,0.12); }
   .route-suggest-btn {
     flex-shrink: 0;
     background: none;

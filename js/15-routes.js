@@ -212,6 +212,25 @@ function _renderRouteAlternatives(key) {
   });
 }
 
+// "🔀" toolbar button — cycles to the next way OSRM found to reach the same
+// stops (wrapping back to the first once you've seen them all). Reuses the
+// same apply/preview logic as clicking an option in the alternatives list.
+window.suggestAlternateRoute = function(key) {
+  const r = ROUTES[key];
+  if (!r.waypoints || r.waypoints.length < 2) {
+    showToast('Adicione ao menos 2 paradas para sugerir uma rota');
+    return;
+  }
+  if (!r.allRoutes || r.allRoutes.length < 2) {
+    showToast(`Nenhuma rota alternativa encontrada para <span class="accent">${_composeRouteName(key)}</span>`);
+    return;
+  }
+  r.selectedRouteIdx = (r.selectedRouteIdx + 1) % r.allRoutes.length;
+  _applySelectedRoute(key);
+  _renderRouteAlternatives(key);
+  showToast(`${_composeRouteName(key)} — <span class="accent">opção ${r.selectedRouteIdx + 1} de ${r.allRoutes.length}</span>`);
+};
+
 // ─── SIDEBAR STOP LIST ──────────────────────────────────────────────────────────
 function _renderRouteStops(key) {
   const r = ROUTES[key];

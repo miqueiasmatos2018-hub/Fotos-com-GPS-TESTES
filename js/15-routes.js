@@ -22,8 +22,10 @@ const OSRM_SERVICE_URL = 'https://router.project-osrm.org/route/v1';
 const ROUTE_NAME_PREFIX = { a: 'ROTA_ALTERNATIVA', b: 'ROTA_ORIGINAL' };
 
 const ROUTES = {
-  a: { nameMiddle: '', distanceKm: 0, color: '#ff0000', waypoints: [], control: null, roadCoords: null },
-  b: { nameMiddle: '', distanceKm: 0, color: '#00ff00', waypoints: [], control: null, roadCoords: null }
+  a: { nameMiddle: '', distanceKm: 0, color: '#ff0000', waypoints: [], control: null, roadCoords: null,
+       allRoutes: [], selectedRouteIdx: 0, previewLine: null },
+  b: { nameMiddle: '', distanceKm: 0, color: '#00ff00', waypoints: [], control: null, roadCoords: null,
+       allRoutes: [], selectedRouteIdx: 0, previewLine: null }
 };
 
 function _routeSuffix(key) { return key === 'a' ? 'A' : 'B'; }
@@ -91,16 +93,23 @@ function _rebuildRouteControl(key) {
     map.removeControl(r.control);
     r.control = null;
   }
+  if (r.previewLine) {
+    map.removeLayer(r.previewLine);
+    r.previewLine = null;
+  }
   if (r.waypoints.length < 2) {
     r.roadCoords = null;
     r.distanceKm = 0;
+    r.allRoutes = [];
+    r.selectedRouteIdx = 0;
     _updateRouteSuffixDisplay(key);
+    _renderRouteAlternatives(key);
     return;
   }
 
   r.control = L.Routing.control({
     waypoints: r.waypoints.map(w => L.latLng(w.lat, w.lng)),
-    router: L.Routing.osrmv1({ serviceUrl: OSRM_SERVICE_URL, profile: 'driving' }),
+    router: L.Routing.osrmv1({ serviceUrl: OSRM_SERVICE_URL, profile: 'driving', alternatives: true }),
     lineOptions: {
       styles: [{ color: r.color, weight: 5, opacity: 0.85 }],
       addWaypoints: true // dragging the line inserts a new stop, like My Maps
@@ -130,21 +139,76 @@ function _rebuildRouteControl(key) {
     _renderRouteStops(key);
   });
 
-  // Capture the actual road-snapped geometry (for KML export) and the
-  // driving distance (for the name suffix) from the resolved route.
+  // OSRM may return more than one way to reach the same stops. We always
+  // reset to its top suggestion (index 0) after any recalculation; the
+  // sidebar picker below lets the person switch to a different one.
   r.control.on('routesfound', e => {
-    const best = e.routes && e.routes[0];
-    if (best && best.coordinates) {
-      r.roadCoords = best.coordinates.map(c => ({ lat: c.lat, lng: c.lng }));
-    }
-    if (best && best.summary && typeof best.summary.totalDistance === 'number') {
-      r.distanceKm = best.summary.totalDistance / 1000;
-      _updateRouteSuffixDisplay(key);
-    }
+    r.allRoutes = e.routes || [];
+    r.selectedRouteIdx = 0;
+    _applySelectedRoute(key);
+    _renderRouteAlternatives(key);
   });
 
   r.control.on('routingerror', () => {
     showToast(`⚠ Não foi possível calcular <span class="accent">${_composeRouteName(key)}</span> — verifique a conexão`);
+  });
+}
+
+// Applies whichever alternative is currently selected: updates the road
+// geometry / distance used for the name suffix and KML export, and (for
+// anything other than OSRM's own top pick, which is already drawn as the
+// interactive/draggable line by the routing control itself) draws a dashed
+// preview of that alternate path so it's visible on the map too.
+function _applySelectedRoute(key) {
+  const r = ROUTES[key];
+  const chosen = r.allRoutes && r.allRoutes[r.selectedRouteIdx];
+  if (!chosen || !chosen.coordinates) return;
+
+  r.roadCoords = chosen.coordinates.map(c => ({ lat: c.lat, lng: c.lng }));
+  if (chosen.summary && typeof chosen.summary.totalDistance === 'number') {
+    r.distanceKm = chosen.summary.totalDistance / 1000;
+    _updateRouteSuffixDisplay(key);
+  }
+
+  if (r.previewLine) {
+    map.removeLayer(r.previewLine);
+    r.previewLine = null;
+  }
+  if (r.selectedRouteIdx !== 0) {
+    r.previewLine = L.polyline(
+      r.roadCoords.map(c => [c.lat, c.lng]),
+      { color: r.color, weight: 4, opacity: 0.55, dashArray: '8 6' }
+    ).addTo(map);
+  }
+}
+
+// Sidebar list of "Opção 1 · 12.4km", "Opção 2 · 13.1km", etc. Only shown
+// when OSRM actually returned more than one way to the same stops.
+function _renderRouteAlternatives(key) {
+  const r = ROUTES[key];
+  const wrap = document.getElementById('routeAlternatives' + _routeSuffix(key));
+  if (!wrap) return;
+
+  if (!r.allRoutes || r.allRoutes.length < 2) {
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+
+  wrap.style.display = '';
+  wrap.innerHTML = r.allRoutes.map((rt, i) => {
+    const km = rt.summary && typeof rt.summary.totalDistance === 'number'
+      ? (rt.summary.totalDistance / 1000).toFixed(1) : '?';
+    const active = i === r.selectedRouteIdx;
+    return `<button class="route-alt-btn ${active ? 'active' : ''}" data-idx="${i}">Opção ${i + 1} · ${km}km</button>`;
+  }).join('');
+
+  wrap.querySelectorAll('.route-alt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      r.selectedRouteIdx = Number(btn.dataset.idx);
+      _applySelectedRoute(key);
+      _renderRouteAlternatives(key);
+    });
   });
 }
 
@@ -203,11 +267,15 @@ window.clearRoute = function(key) {
   const r = ROUTES[key];
   const label = _composeRouteName(key);
   if (r.control) { map.removeControl(r.control); r.control = null; }
+  if (r.previewLine) { map.removeLayer(r.previewLine); r.previewLine = null; }
   r.waypoints  = [];
   r.roadCoords = null;
   r.distanceKm = 0;
+  r.allRoutes = [];
+  r.selectedRouteIdx = 0;
   _updateRouteSuffixDisplay(key);
   _renderRouteStops(key);
+  _renderRouteAlternatives(key);
   showToast(`${label} <span class="accent">limpa</span>`);
 };
 

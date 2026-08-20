@@ -34,7 +34,7 @@ function _routeSuffix(key) { return key === 'a' ? 'A' : 'B'; }
 // yellow marker named "LD_INICIO_OAE", tracked here so it travels along with
 // the two routes when exported.
 const LD_INICIO_COLOR = '#ffff00';
-const LD_INICIO_POINTS = []; // { lat, lng, marker }
+const LD_INICIO_POINTS = []; // { lat, lng } -- not shown on the map, export-only
 
 function _extractLdInicioPointsFromKml(parsedLayer) {
   const found = [];
@@ -49,31 +49,14 @@ function _extractLdInicioPointsFromKml(parsedLayer) {
   return found;
 }
 
-function _addLdInicioMarker(lat, lng) {
-  const marker = L.circleMarker([lat, lng], {
-    radius: 7,
-    color: '#000',
-    weight: 2,
-    fillColor: LD_INICIO_COLOR,
-    fillOpacity: 0.95
-  }).addTo(map);
-  marker.bindPopup(`
-    <div class="popup-content">
-      <div class="popup-name">LD_INICIO_OAE</div>
-      <div class="popup-row">Lat: <span>${lat.toFixed(8)}</span></div>
-      <div class="popup-row">Lng: <span>${lng.toFixed(8)}</span></div>
-    </div>
-  `);
-  LD_INICIO_POINTS.push({ lat, lng, marker });
-}
-
 // Called from loadKmlFile() once a dropped KML finishes loading:
-//  1. Scans it for any LD_INICIO / LD_INICIO_OAE point and marks it yellow.
+//  1. Scans it for any LD_INICIO / LD_INICIO_OAE point and remembers it
+//     (not drawn on the map -- only included later in the KML export).
 //  2. Uses the KML's filename to auto-fill the editable middle segment of
 //     BOTH route names.
 function registerRouteKmlDrop(parsedLayer, fileName) {
   const points = _extractLdInicioPointsFromKml(parsedLayer);
-  points.forEach(p => _addLdInicioMarker(p.lat, p.lng));
+  points.forEach(p => LD_INICIO_POINTS.push({ lat: p.lat, lng: p.lng }));
   if (points.length) {
     showToast(`📍 <span class="accent">${points.length}</span> ponto${points.length > 1 ? 's' : ''} LD_INICIO_OAE identificado${points.length > 1 ? 's' : ''}`);
   }

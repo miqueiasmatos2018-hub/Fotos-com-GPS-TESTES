@@ -67,6 +67,56 @@ async function _fetchOsrmHighwayFraction(points) {
   }
 }
 
+// Pulls the highway code (e.g. "BR-174", "RR-342") out of a road name/ref,
+// normalised to uppercase with a single hyphen, so "br 174" and "BR-174"
+// collapse to the same token.
+function _extractHighwayCode(text) {
+  if (!text) return null;
+  const m = String(text).match(HIGHWAY_REF_RE);
+  if (!m) return null;
+  return m[0].toUpperCase().replace(/[-\s]+/, '-');
+}
+
+// Ordered list of the highways a route travels, in the order they're used —
+// e.g. ["BR-174", "RR-342", "RR-203", "BR-174"]. Only *consecutive*
+// duplicates are collapsed, so a route that leaves BR-174 and later rejoins
+// it correctly shows BR-174 twice (which is the normal shape here, since
+// these routes start and end on the same BR).
+function _highwaySequenceFromRoute(osrmRoute) {
+  if (!osrmRoute || !osrmRoute.legs) return [];
+  const seq = [];
+  for (const leg of osrmRoute.legs) {
+    for (const step of (leg.steps || [])) {
+      // OSRM puts the highway designation in `ref` on some roads and only
+      // in `name` on others, so check both.
+      const code = _extractHighwayCode(step.ref) || _extractHighwayCode(step.name);
+      if (!code) continue;
+      if (seq.length === 0 || seq[seq.length - 1] !== code) seq.push(code);
+    }
+  }
+  return seq;
+}
+
+// Fetches a route and returns both its total distance and the ordered
+// sequence of highways it uses, for the exported description.
+async function _fetchRouteDescription(points) {
+  const coordStr = points.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM_SERVICE_URL}/driving/${coordStr}?overview=false&steps=true`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    const rt = data.routes && data.routes[0];
+    if (!rt) return null;
+    return {
+      distanceKm: rt.distance / 1000,
+      highways: _highwaySequenceFromRoute(rt)
+    };
+  } catch (err) {
+    console.error('OSRM route-description fetch failed:', err);
+    return null;
+  }
+}
+
 // Debounced per-route wrapper around the highway check above. Only warns
 // when the fraction is genuinely known and below the threshold, and only
 // once the route has settled (see the call site in _rebuildRouteControl).
@@ -687,4 +737,72 @@ ${routePlacemarks}${routePlacemarks && ldPlacemarks ? '\n' : ''}${ldPlacemarks}
   if (ready.length) parts.push(`${ready.length} rota${ready.length > 1 ? 's' : ''}`);
   if (LD_INICIO_POINTS.length) parts.push(`${LD_INICIO_POINTS.length} ponto${LD_INICIO_POINTS.length > 1 ? 's' : ''} LD_INICIO_OAE`);
   showToast(`⬇ <span class="accent">${parts.join(' + ')}</span> exportado(s)`);
+};
+
+// ─── TXT REPORT EXPORT ────────────────────────────────────────────────────────
+// Exports a plain-text summary: the distance of each route, the difference
+// between them, and a description of each route as the ordered sequence of
+// highways it travels (e.g. "BR-174; RR-342; RR-203; BR-174").
+window.exportRoutesTXT = async function() {
+  const a = ROUTES.a; // vermelha / ROTA_ALTERNATIVA
+  const b = ROUTES.b; // verde    / ROTA_ORIGINAL
+
+  const haveA = a.waypoints && a.waypoints.length >= 2;
+  const haveB = b.waypoints && b.waypoints.length >= 2;
+  if (!haveA && !haveB) {
+    showToast('Crie ao menos uma rota antes de exportar o relatório');
+    return;
+  }
+
+  showToast('📝 Gerando relatório…');
+
+  const [descA, descB] = await Promise.all([
+    haveA ? _fetchRouteDescription(a.waypoints) : Promise.resolve(null),
+    haveB ? _fetchRouteDescription(b.waypoints) : Promise.resolve(null)
+  ]);
+
+  // Prefer the freshly-fetched distance; fall back to the one already stored
+  // on the route if the request failed, so the report still has numbers.
+  const kmA = descA ? descA.distanceKm : (haveA ? a.distanceKm : null);
+  const kmB = descB ? descB.distanceKm : (haveB ? b.distanceKm : null);
+
+  const fmtKm  = v => v != null ? `${v.toFixed(1)} KM` : '—';
+  const fmtSeq = d => (d && d.highways.length) ? d.highways.join('; ') : '—';
+
+  const lines = [];
+  lines.push('RELATORIO DE ROTAS');
+  lines.push('='.repeat(60));
+  lines.push('');
+
+  if (haveB) {
+    lines.push(`${_composeRouteName('b')}`);
+    lines.push(`  Extensao...: ${fmtKm(kmB)}`);
+    lines.push(`  Trajeto....: ${fmtSeq(descB)}`);
+    lines.push('');
+  }
+  if (haveA) {
+    lines.push(`${_composeRouteName('a')}`);
+    lines.push(`  Extensao...: ${fmtKm(kmA)}`);
+    lines.push(`  Trajeto....: ${fmtSeq(descA)}`);
+    lines.push('');
+  }
+
+  if (kmA != null && kmB != null) {
+    const diff = kmA - kmB;
+    const sign = diff >= 0 ? '+' : '-';
+    lines.push('-'.repeat(60));
+    lines.push(`DIFERENCA: ${sign}${Math.abs(diff).toFixed(1)} KM`);
+    lines.push(`  (${_composeRouteName('a')} em relacao a ${_composeRouteName('b')})`);
+  } else {
+    lines.push('-'.repeat(60));
+    lines.push('DIFERENCA: indisponivel (crie as duas rotas para comparar)');
+  }
+  lines.push('');
+
+  const middle = (a.nameMiddle || b.nameMiddle || '').trim();
+  const safeMiddle = middle.replace(/[\\/:*?"<>|]/g, '_');
+  const fileName = safeMiddle ? `ROTA_ALTERNATIVA_${safeMiddle}.txt` : 'ROTA_ALTERNATIVA.txt';
+
+  triggerDownload(new Blob([lines.join('\r\n')], { type: 'text/plain;charset=utf-8' }), fileName);
+  showToast(`⬇ Relatório <span class="accent">${fileName}</span> exportado`);
 };

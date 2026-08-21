@@ -674,7 +674,15 @@ ${routePlacemarks}${routePlacemarks && ldPlacemarks ? '\n' : ''}${ldPlacemarks}
 </kml>
 `;
 
-  triggerDownload(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), 'rotas.kml');
+  // Exported filename: ROTA_ALTERNATIVA_<nome do KML solto no mapa>.kml
+  // nameMiddle is filled in by registerRouteKmlDrop() when a KML is dropped;
+  // if nothing has been dropped yet it falls back to a plain name so the
+  // download still works.
+  const middle = (ROUTES.a.nameMiddle || '').trim();
+  const safeMiddle = middle.replace(/[\\/:*?"<>|]/g, '_'); // strip chars illegal in filenames
+  const fileName = safeMiddle ? `ROTA_ALTERNATIVA_${safeMiddle}.kml` : 'ROTA_ALTERNATIVA.kml';
+
+  triggerDownload(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), fileName);
   const parts = [];
   if (ready.length) parts.push(`${ready.length} rota${ready.length > 1 ? 's' : ''}`);
   if (LD_INICIO_POINTS.length) parts.push(`${LD_INICIO_POINTS.length} ponto${LD_INICIO_POINTS.length > 1 ? 's' : ''} LD_INICIO_OAE`);

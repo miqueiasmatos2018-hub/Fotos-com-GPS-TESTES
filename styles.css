@@ -362,23 +362,27 @@
     align-items: center;
     justify-content: space-between;
     padding: 4px 0;
-    font-size: 13px;
-    font-weight: 700;
   }
-  .medidas-row span { color: #ffffff; }
-  .medidas-row b { color: var(--text); font-family: var(--mono); }
-  .medidas-row small { font-size: 11px; font-weight: 700; color: #ffffff; opacity: 0.75; margin-left: 4px; }
+  /* Labels (Largura Útil, Média Comprimento, Possui Inclinação, Sentido,
+     Esconsidade): bold, white, larger. */
+  .medidas-row span { color: #ffffff; font-weight: 700; font-size: 13px; }
+  /* Results/values for those labels -- including the barrier addition and
+     the cm measurements -- use the app's normal row text weight/size, just
+     colored #d4f53c. */
+  .medidas-row b { color: var(--text); font-family: var(--mono); font-weight: 400; font-size: 11px; }
+  .medidas-row small { font-size: 11px; font-weight: 400; color: var(--text); opacity: 0.85; margin-left: 4px; }
 
   .medidas-badge {
     font-family: var(--mono);
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 400;
     padding: 2px 7px;
     border-radius: 3px;
     letter-spacing: 0.3px;
+    color: var(--text);
   }
-  .medidas-badge-ok   { background: rgba(76,175,80,0.15);  color: #66bb6a; border: 1px solid rgba(76,175,80,0.35); }
-  .medidas-badge-warn { background: rgba(255,152,0,0.15);  color: #ffa726; border: 1px solid rgba(255,152,0,0.35); }
+  .medidas-badge-ok   { background: rgba(76,175,80,0.15);  border: 1px solid rgba(76,175,80,0.35); }
+  .medidas-badge-warn { background: rgba(255,152,0,0.15);  border: 1px solid rgba(255,152,0,0.35); }
 
   .medidas-focus-btn {
     width: 100%;

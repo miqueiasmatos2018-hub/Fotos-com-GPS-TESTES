@@ -202,11 +202,10 @@ function _analyzeMedidasStructure(points) {
 
   const avgLongPercentage = (inclLongLD.percentage + inclLongLE.percentage) / 2;
   const avgLongElevDiff = ((ldFinal.elevation - ldInicio.elevation) + (leFinal.elevation - leInicio.elevation)) / 2;
-  // Subida/Descida is only reported when the elevation change is more than
-  // 3% of the structure's average length -- smaller differences are
-  // reported as Nivelado rather than a (likely noise-driven) slope.
-  const inclinacaoLimiteM = 0.03 * mediaComprimento;
-  const possuiInclinacao = Math.abs(avgLongElevDiff) > inclinacaoLimiteM;
+  // No tolerance: any non-zero elevation change (beyond floating-point
+  // noise) counts as Subida/Descida. Only an exact/near-exact match is
+  // reported as Nivelado.
+  const possuiInclinacao = Math.abs(avgLongElevDiff) > 1e-6;
   const sentido = !possuiInclinacao ? 'Nivelado' : (avgLongElevDiff > 0 ? 'Subida' : 'Descida');
 
   return {

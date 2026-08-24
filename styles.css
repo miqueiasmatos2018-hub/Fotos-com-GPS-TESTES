@@ -351,7 +351,7 @@
     font-family: var(--mono);
     font-size: 13px;
     font-weight: 700;
-    color: #ffffff;
+    color: var(--text);
     letter-spacing: 0.3px;
     margin-bottom: 8px;
     padding-bottom: 6px;
@@ -366,7 +366,7 @@
     font-weight: 700;
   }
   .medidas-row span { color: #ffffff; }
-  .medidas-row b { color: #ffffff; font-family: var(--mono); }
+  .medidas-row b { color: var(--text); font-family: var(--mono); }
   .medidas-row small { font-size: 11px; font-weight: 700; color: #ffffff; opacity: 0.75; margin-left: 4px; }
 
   .medidas-badge {

@@ -349,9 +349,9 @@
   }
   .medidas-card-header {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
-    color: var(--text);
+    color: #ffffff;
     letter-spacing: 0.3px;
     margin-bottom: 8px;
     padding-bottom: 6px;
@@ -361,15 +361,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 3px 0;
-    font-size: 11px;
+    padding: 4px 0;
+    font-size: 13px;
+    font-weight: 700;
   }
-  .medidas-row span { color: var(--text2); }
-  .medidas-row b { color: var(--text); font-family: var(--mono); }
+  .medidas-row span { color: #ffffff; }
+  .medidas-row b { color: #ffffff; font-family: var(--mono); }
+  .medidas-row small { font-size: 11px; font-weight: 700; color: #ffffff; opacity: 0.75; margin-left: 4px; }
 
   .medidas-badge {
     font-family: var(--mono);
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     padding: 2px 7px;
     border-radius: 3px;
@@ -383,15 +385,42 @@
     margin-top: 8px;
     background: rgba(0,229,255,0.08);
     border: 1px solid rgba(0,229,255,0.3);
-    color: var(--text2);
+    color: #ffffff;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 12px;
+    font-weight: 700;
     padding: 6px 8px;
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.15s;
   }
   .medidas-focus-btn:hover { color: var(--text); border-color: #00e5ff; background: rgba(0,229,255,0.15); }
+
+  .medidas-barrier-toggle {
+    display: flex;
+    gap: 4px;
+    margin: 2px 0 6px;
+  }
+  .medidas-barrier-btn {
+    flex: 1;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    color: #ffffff;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 5px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .medidas-barrier-btn:hover { border-color: #00e5ff; }
+  .medidas-barrier-btn.active {
+    background: rgba(0,229,255,0.18);
+    border-color: #00e5ff;
+    color: #00e5ff;
+  }
 
   .ponto-icon {
     font-size: 16px;

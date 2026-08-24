@@ -69,6 +69,7 @@
       <button class="tab-btn active" id="tabPhotos" onclick="switchTab('photos')">📷 FOTOS</button>
       <button class="tab-btn" id="tabPontos" onclick="switchTab('pontos')">📌 Pontos</button>
       <button class="tab-btn" id="tabRotas" onclick="switchTab('rotas')">🛣 Rotas</button>
+      <button class="tab-btn" id="tabMedidas" onclick="switchTab('medidas')">📏 Medidas</button>
     </div>
 
     <div class="tab-content active" id="tabContentPhotos">
@@ -185,6 +186,12 @@
 
       <button class="btn-export route-export-btn" id="routeExportBtn" onclick="exportRoutesKML()">⬇ EXPORTAR ROTAS (KML)</button>
       <button class="btn-export route-export-btn" id="routeExportTxtBtn" onclick="exportRoutesTXT()">⬇ EXPORTAR RELATÓRIO (TXT)</button>
+    </div>
+
+    <div class="tab-content" id="tabContentMedidas">
+      <div class="medidas-intro">Solte um KML com pontos <b>LD_INICIO_OAE</b>, <b>LE_INICIO_OAE</b>, <b>LD_FINAL_OAE</b> e <b>LE_FINAL_OAE</b> (ou as variações "PONTE") para calcular a estrutura.</div>
+      <div class="medidas-empty" id="medidasEmpty">Nenhuma estrutura identificada ainda</div>
+      <div class="medidas-list" id="medidasList"></div>
     </div>
 
     <div class="export-bar" id="exportBar">
@@ -422,6 +429,7 @@
 <script src="js/13-sorting.js"></script>
 <script src="js/14-tools.js"></script>
 <script src="js/15-routes.js"></script>
-<script src="js/16-boot.js"></script>
+<script src="js/16-medidas.js"></script>
+<script src="js/17-boot.js"></script>
 </body>
 </html>

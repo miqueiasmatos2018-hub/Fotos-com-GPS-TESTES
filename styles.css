@@ -381,8 +381,8 @@
     letter-spacing: 0.3px;
     color: var(--text);
   }
-  .medidas-badge-ok   { background: rgba(76,175,80,0.15);  border: 1px solid rgba(76,175,80,0.35); }
-  .medidas-badge-warn { background: rgba(255,152,0,0.15);  border: 1px solid rgba(255,152,0,0.35); }
+  .medidas-badge-ok   { background: var(--accent-glow); border: 1px solid var(--accent); }
+  .medidas-badge-warn { background: var(--accent-glow); border: 1px solid var(--accent); }
 
   .medidas-focus-btn {
     width: 100%;
@@ -419,11 +419,11 @@
     text-align: center;
     transition: all 0.15s;
   }
-  .medidas-barrier-btn:hover { border-color: #00e5ff; }
+  .medidas-barrier-btn:hover { border-color: var(--accent); }
   .medidas-barrier-btn.active {
-    background: rgba(0,229,255,0.18);
-    border-color: #00e5ff;
-    color: #00e5ff;
+    background: var(--accent-glow);
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .ponto-icon {

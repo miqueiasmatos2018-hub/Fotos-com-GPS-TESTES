@@ -16,7 +16,12 @@ window.switchTab = function(tab) {
   if (tab !== 'rotas' && typeof _routePickingKey !== 'undefined' && _routePickingKey) {
     window.toggleRoutePicking(_routePickingKey);
   }
-  ['photos','pontos','rotas'].forEach(t => {
+  // The structure outline drawing only makes sense while looking at the
+  // Medidas tab -- show it when entering, hide it the moment you leave.
+  if (typeof _setMedidasLayerVisible === 'function') {
+    _setMedidasLayerVisible(tab === 'medidas');
+  }
+  ['photos','pontos','rotas','medidas'].forEach(t => {
     const btn = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
     const content = document.getElementById('tabContent' + t.charAt(0).toUpperCase() + t.slice(1));
     if (btn)     btn.classList.toggle('active',     t === tab);

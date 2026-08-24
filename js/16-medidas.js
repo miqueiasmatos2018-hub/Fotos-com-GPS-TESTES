@@ -209,7 +209,7 @@ function _analyzeMedidasStructure(points) {
     larguraInicio, larguraFinal, larguraMedia, larguraEfetiva,
     comprimentoLD, comprimentoLE, mediaComprimento, diferencaComprimentos,
     anguloEsconsidade, statusEsconsidade,
-    possuiInclinacao, avgLongPercentage, sentido,
+    possuiInclinacao, avgLongPercentage, avgLongElevDiff, sentido,
     inclTransvInicio, inclTransvFinal, inclLongLD, inclLongLE
   };
 }
@@ -228,7 +228,7 @@ function registerMedidasKmlDrop(parsedLayer) {
   const touchedGroups = new Set();
   found.forEach(p => {
     const key = p.groupKey || '__default__';
-    if (!MEDIDAS_STRUCTURES[key]) MEDIDAS_STRUCTURES[key] = { groupKey: p.groupKey, points: {}, analysis: null };
+    if (!MEDIDAS_STRUCTURES[key]) MEDIDAS_STRUCTURES[key] = { groupKey: p.groupKey, points: {}, analysis: null, barrierType: null };
     MEDIDAS_STRUCTURES[key].points[p.canonical] = { lat: p.lat, lng: p.lng, elevation: p.elevation };
     touchedGroups.add(key);
   });
@@ -267,21 +267,35 @@ function _renderMedidasList() {
     const a = s.analysis;
     const title = s.groupKey || 'Estrutura';
 
+    // Barrier addition: mutually exclusive -- NJ adds 80cm, Guarda Corpo
+    // adds 30cm, neither selected adds nothing.
+    const barrierAddM = s.barrierType === 'NJ' ? 0.80 : s.barrierType === 'GC' ? 0.30 : 0;
+    const larguraAjustada = a.larguraEfetiva + barrierAddM;
+    const larguraExtra = barrierAddM > 0 ? `<small>+${Math.round(barrierAddM * 100)}cm</small>` : '';
+
+    const inclCm = Math.round(Math.abs(a.avgLongElevDiff) * 100);
     const inclBadge = a.possuiInclinacao
-      ? `<span class="medidas-badge medidas-badge-warn">Sim · ${a.avgLongPercentage.toFixed(2)}%</span>`
+      ? `<span class="medidas-badge medidas-badge-warn">Sim · ${a.avgLongPercentage.toFixed(2)}% · ${inclCm}cm</span>`
       : `<span class="medidas-badge medidas-badge-ok">Não</span>`;
+
     const sentidoIcon = a.sentido === 'Subida' ? '↗️' : a.sentido === 'Descida' ? '↘️' : '➡️';
-    const esconsaBadge = a.statusEsconsidade === 'Não Esconsa'
-      ? `<span class="medidas-badge medidas-badge-ok">${a.statusEsconsidade}</span>`
-      : `<span class="medidas-badge medidas-badge-warn">${a.statusEsconsidade} · ${a.anguloEsconsidade.toFixed(1)}°</span>`;
+    const sentidoCm = a.sentido !== 'Nivelado' ? `<small>${inclCm}cm</small>` : '';
+
+    // Skew angle is now always shown in degrees, not just when skewed.
+    const esconsaClass = a.statusEsconsidade === 'Não Esconsa' ? 'medidas-badge-ok' : 'medidas-badge-warn';
+    const esconsaBadge = `<span class="medidas-badge ${esconsaClass}">${a.statusEsconsidade} · ${a.anguloEsconsidade.toFixed(1)}°</span>`;
 
     return `
       <div class="medidas-card" data-key="${key}">
         <div class="medidas-card-header">📐 ${title}</div>
-        <div class="medidas-row"><span>Largura Útil (Efetiva)</span><b>${a.larguraEfetiva.toFixed(2)} m</b></div>
+        <div class="medidas-row"><span>Largura Útil (Efetiva)</span><b>${larguraAjustada.toFixed(2)} m ${larguraExtra}</b></div>
+        <div class="medidas-barrier-toggle">
+          <button class="medidas-barrier-btn ${s.barrierType === 'NJ' ? 'active' : ''}" data-key="${key}" data-barrier="NJ">Barreira NJ</button>
+          <button class="medidas-barrier-btn ${s.barrierType === 'GC' ? 'active' : ''}" data-key="${key}" data-barrier="GC">Guarda Corpo</button>
+        </div>
         <div class="medidas-row"><span>Média Comprimento</span><b>${a.mediaComprimento.toFixed(2)} m</b></div>
         <div class="medidas-row"><span>Possui Inclinação</span>${inclBadge}</div>
-        <div class="medidas-row"><span>Sentido</span><b>${sentidoIcon} ${a.sentido}</b></div>
+        <div class="medidas-row"><span>Sentido</span><b>${sentidoIcon} ${a.sentido}</b>${sentidoCm}</div>
         <div class="medidas-row"><span>Esconsidade</span>${esconsaBadge}</div>
         <button class="medidas-focus-btn" data-key="${key}">📍 Focar no mapa</button>
       </div>
@@ -290,6 +304,18 @@ function _renderMedidasList() {
 
   list.querySelectorAll('.medidas-focus-btn').forEach(btn => {
     btn.addEventListener('click', () => _focusMedidasStructure(btn.dataset.key));
+  });
+
+  list.querySelectorAll('.medidas-barrier-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const s = MEDIDAS_STRUCTURES[btn.dataset.key];
+      if (!s) return;
+      const picked = btn.dataset.barrier;
+      // Clicking the already-active option turns it off (mutually exclusive
+      // toggle, with "neither" as a valid third state).
+      s.barrierType = s.barrierType === picked ? null : picked;
+      _renderMedidasList();
+    });
   });
 }
 

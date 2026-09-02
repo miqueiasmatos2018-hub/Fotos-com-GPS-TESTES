@@ -1183,6 +1183,21 @@ const ROUTE_IMAGE_WIDTH = 2000;
 const ROUTE_IMAGE_HEIGHT = 1250; // ~16:10, matching the reference export's proportions
 const ROUTE_IMAGE_PADDING_FRACTION = 0.12; // breathing room around the routes/marker
 const ESRI_WORLD_IMAGERY_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
+// "Hybrid" reference overlays (transparent PNG, roads+labels / place names)
+// drawn on top of the satellite base and under our own route lines --
+// exactly the Esri layers behind the standard "Imagery Hybrid" basemap
+// style. Added as a baseline fallback for road/city labeling: the
+// Overpass-based custom labels below are still tried first and drawn on
+// top when they succeed (bigger, fixed-pixel-size text, unaffected by
+// scale -- see the note above), but if Overpass is unreachable/blocked in
+// a given network, these still put SOME road tracing and city names on
+// the image instead of none at all. Same known trade-off documented below
+// still applies to these two layers specifically: they're pre-rendered at
+// whatever real-world scale the bbox implies, so their own baked-in label
+// text can come out small on a route spanning 100km+ -- acceptable for a
+// fallback, which is why the Overpass-drawn labels still take priority.
+const ESRI_TRANSPORTATION_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/export';
+const ESRI_BOUNDARIES_PLACES_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/export';
 // Road tracing + labels (BR-xxx, RR-xxx...) are drawn ourselves from OSM
 // data (via Overpass) instead of using Esri's Reference/World_Transportation
 // raster overlay: that overlay is a pre-rendered cartographic layer whose
@@ -1813,7 +1828,7 @@ function _drawRouteImageAttribution(ctx, width, height) {
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
-  ctx.fillText('Imagery © Esri, Maxar, Earthstar Geographics · Roads © OpenStreetMap contributors', 10 * s, height - 8 * s);
+  ctx.fillText('Imagery/Reference © Esri, Maxar, Earthstar Geographics, HERE, Garmin · Roads © OpenStreetMap contributors', 10 * s, height - 8 * s);
   ctx.restore();
 }
 
@@ -1868,11 +1883,22 @@ window.exportRoutesImage = async function() {
     // Base satellite (requested lossless so the only JPEG compression that
     // ever happens is the final canvas.toBlob() below -- avoids the
     // double-recompression quality loss of re-saving an already-JPEG base),
-    // the OSM road/ref data, and the cities inside the frame are all
-    // independent of each other, so fetch all three at once instead of one
-    // after another.
-    const [baseImg, roadWaysRaw, citiesRaw] = await Promise.all([
+    // the two Esri "hybrid" reference overlays (roads + place names, see
+    // the note above ESRI_TRANSPORTATION_EXPORT_URL), the OSM road/ref
+    // data, and the cities inside the frame are all independent of each
+    // other, so fetch everything at once instead of one after another.
+    // The two reference overlays are best-effort: if either fails, the
+    // image still generates with just the satellite + our own overlays.
+    const [baseImg, transportationImg, placesImg, roadWaysRaw, citiesRaw] = await Promise.all([
       _fetchEsriMapImage(ESRI_WORLD_IMAGERY_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png24' }),
+      _fetchEsriMapImage(ESRI_TRANSPORTATION_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true }).catch(err => {
+        console.warn('Esri World_Transportation overlay indisponível:', err);
+        return null;
+      }),
+      _fetchEsriMapImage(ESRI_BOUNDARIES_PLACES_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true }).catch(err => {
+        console.warn('Esri World_Boundaries_and_Places overlay indisponível:', err);
+        return null;
+      }),
       _fetchRoadRefWaysInBBox(bbox).catch(err => {
         console.warn('Overpass road/ref lookup indisponível, seguindo só com satélite + rotas:', err);
         return [];
@@ -1915,6 +1941,12 @@ window.exportRoutesImage = async function() {
     canvas.height = ROUTE_IMAGE_HEIGHT;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(baseImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
+    // "Hybrid" reference overlays (roads + place names), transparent PNGs
+    // aligned to the exact same bbox -- see the note above
+    // ESRI_TRANSPORTATION_EXPORT_URL for why these are a baseline under our
+    // own Overpass-drawn labels rather than a replacement for them.
+    if (transportationImg) ctx.drawImage(transportationImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
+    if (placesImg) ctx.drawImage(placesImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
 
     const project = (lat, lng) => {
       const m = _lngLatToMercatorXY(lng, lat);

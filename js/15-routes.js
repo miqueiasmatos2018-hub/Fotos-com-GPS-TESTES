@@ -1256,7 +1256,78 @@ async function _fetchRoadRefWaysInBBox(bbox) {
   throw lastErr || new Error('Todos os espelhos do Overpass falharam');
 }
 
-const ROAD_NEAR_ROUTE_THRESHOLD_KM = 0.1; // ~100m -- generous enough for OSM/OSRM alignment slack, tight enough to exclude a parallel road
+const ROUTE_IMAGE_CITY_MAX_LABELS = 8;         // caps how many city labels a wide frame can end up with
+
+// Fetches settlements (city/town only -- see _pickCitiesForImage for why
+// villages are excluded) inside the same bbox used for the satellite base
+// image and road labels, so the exported photo can show which cities
+// appear in frame -- same Overpass endpoints/shape as
+// _fetchRoadRefWaysInBBox above and _fetchCidadesNear in 16-medidas.js
+// (that one searches by radius around a single point; this one searches
+// the whole rectangular frame instead, which is what an image caption
+// needs).
+async function _fetchCitiesInBBox(bbox) {
+  const south = _mercatorYToLat(bbox.ymin);
+  const north = _mercatorYToLat(bbox.ymax);
+  const west = _mercatorXToLng(bbox.xmin);
+  const east = _mercatorXToLng(bbox.xmax);
+  const query = `[out:json][timeout:25];node(${south},${west},${north},${east})["place"~"^(city|town)$"];out body;`;
+
+  let lastErr = null;
+  for (const endpoint of OVERPASS_ROAD_LABEL_ENDPOINTS) {
+    try {
+      const res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return data.elements || [];
+    } catch (err) {
+      lastErr = err;
+      console.warn(`Overpass city lookup failed (${endpoint}):`, err);
+    }
+  }
+  throw lastErr || new Error('Todos os espelhos do Overpass falharam');
+}
+
+// Narrows the raw Overpass hits down to what's actually worth labeling on
+// the image: named places only, duplicates collapsed (OSM sometimes has
+// more than one node for the same settlement), and capped at
+// ROUTE_IMAGE_CITY_MAX_LABELS so a wide/rural frame doesn't end up wall to
+// wall with labels. Villages/povoados are excluded entirely -- only
+// city/town come back from _fetchCitiesInBBox above in the first place, so
+// this only has city vs. town left to rank. Reuses
+// _cityPopulation/CIDADE_NAME_EXCLUDE_RE from 16-medidas.js (loaded before
+// this runs, even though that file loads after this one -- both are
+// classic scripts sharing one global scope, and this only executes later
+// from a button click).
+function _pickCitiesForImage(raw) {
+  const named = raw.filter(c =>
+    c.tags && c.tags.name && c.lat != null && c.lon != null &&
+    !(typeof CIDADE_NAME_EXCLUDE_RE !== 'undefined' && CIDADE_NAME_EXCLUDE_RE.test(c.tags.name))
+  );
+
+  const deduped = [];
+  named.forEach(c => {
+    const pop = (typeof _cityPopulation === 'function' ? _cityPopulation(c) : null) || 0;
+    const dup = deduped.find(d =>
+      d.tags.name === c.tags.name || _haversineKm(d.lat, d.lon, c.lat, c.lon) < 2
+    );
+    if (!dup) { deduped.push(c); return; }
+    const dupPop = (typeof _cityPopulation === 'function' ? _cityPopulation(dup) : null) || 0;
+    if (pop > dupPop) Object.assign(dup, c);
+  });
+
+  const placeScore = place => (place === 'city' ? 2 : place === 'town' ? 1 : 0);
+  deduped.sort((a, b) => {
+    const scoreDiff = placeScore(b.tags.place) - placeScore(a.tags.place);
+    if (scoreDiff) return scoreDiff;
+    const popA = (typeof _cityPopulation === 'function' ? _cityPopulation(a) : null) || 0;
+    const popB = (typeof _cityPopulation === 'function' ? _cityPopulation(b) : null) || 0;
+    return popB - popA;
+  });
+  return deduped.slice(0, ROUTE_IMAGE_CITY_MAX_LABELS);
+}
+
+
 const ROAD_NEAR_ROUTE_GRID_CELL_DEG = 0.001; // ~110m cells -- close to the threshold itself
 
 // Buckets route points into a lat/lng grid so "is there a route point near
@@ -1450,6 +1521,36 @@ function _drawRouteImageLabel(ctx, x, y, text) {
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   ctx.fillText(text, x + padX, y);
+}
+
+// Small white dot + name pill for a city/town that falls inside the
+// exported frame (see _fetchCitiesInBBox / _pickCitiesForImage above) --
+// visually distinct from the route pins and road shields so it reads as
+// "place on the map", not another stop or highway marker.
+function _drawCityMarker(ctx, x, y, name) {
+  const s = ROUTE_IMAGE_UI_SCALE;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, 3.5 * s, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.lineWidth = 1.2 * s;
+  ctx.strokeStyle = '#000';
+  ctx.stroke();
+  ctx.restore();
+
+  const fontSize = 13 * s, padX = 6 * s, padY = 3 * s;
+  ctx.font = `600 ${fontSize}px sans-serif`;
+  const w = ctx.measureText(name).width + padX * 2;
+  const h = fontSize + padY * 2;
+  const lx = x + 7 * s, ly = y;
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  _drawRoundedRect(ctx, lx, ly - h / 2, w, h, 3 * s);
+  ctx.fill();
+  ctx.fillStyle = '#1a1a1a';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.fillText(name, lx + padX, ly);
 }
 
 // Highway "shield" pill, e.g. "BR-174" / "RR-203" -- fixed pixel font size
@@ -1751,16 +1852,22 @@ window.exportRoutesImage = async function() {
 
     // Base satellite (requested lossless so the only JPEG compression that
     // ever happens is the final canvas.toBlob() below -- avoids the
-    // double-recompression quality loss of re-saving an already-JPEG base)
-    // and the OSM road/ref data are independent of each other, so fetch
-    // both at once instead of one after another.
-    const [baseImg, roadWaysRaw] = await Promise.all([
+    // double-recompression quality loss of re-saving an already-JPEG base),
+    // the OSM road/ref data, and the cities inside the frame are all
+    // independent of each other, so fetch all three at once instead of one
+    // after another.
+    const [baseImg, roadWaysRaw, citiesRaw] = await Promise.all([
       _fetchEsriMapImage(ESRI_WORLD_IMAGERY_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png24' }),
       _fetchRoadRefWaysInBBox(bbox).catch(err => {
         console.warn('Overpass road/ref lookup indisponível, seguindo só com satélite + rotas:', err);
         return [];
+      }),
+      _fetchCitiesInBBox(bbox).catch(err => {
+        console.warn('Overpass city lookup indisponível, imagem sairá sem rótulos de cidade:', err);
+        return [];
       })
     ]);
+    const citiesForImage = _pickCitiesForImage(citiesRaw);
     // First keep only the roads actually part of the alternative route's
     // trajeto, then (as a safety net) only the portions of those roads
     // that genuinely run near one of the built routes -- see
@@ -1838,6 +1945,11 @@ window.exportRoutesImage = async function() {
       // O deslocamento do rótulo era em pixels fixos, então em outros
       // tamanhos de saída ele descolava do alfinete.
       _drawRouteImageLabel(ctx, px + 14 * ROUTE_IMAGE_UI_SCALE, py - 11 * ROUTE_IMAGE_UI_SCALE, 'LD_INICIO_OAE');
+    });
+
+    citiesForImage.forEach(c => {
+      const [px, py] = project(c.lat, c.lon);
+      _drawCityMarker(ctx, px, py, c.tags.name);
     });
 
     const code = (ROUTES.a.nameMiddle || ROUTES.b.nameMiddle || '').trim();

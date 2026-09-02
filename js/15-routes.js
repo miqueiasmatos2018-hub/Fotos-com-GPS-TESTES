@@ -1183,26 +1183,6 @@ const ROUTE_IMAGE_WIDTH = 2000;
 const ROUTE_IMAGE_HEIGHT = 1250; // ~16:10, matching the reference export's proportions
 const ROUTE_IMAGE_PADDING_FRACTION = 0.12; // breathing room around the routes/marker
 const ESRI_WORLD_IMAGERY_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
-// "Hybrid" reference overlays (transparent PNG, roads+labels / place names)
-// drawn on top of the satellite base -- exactly the Esri layers behind the
-// standard "Imagery Hybrid" basemap style. Added as a baseline fallback
-// for road/city labeling: the Overpass-based custom labels are still tried
-// first and drawn on top when they succeed (bigger, fixed-pixel-size text,
-// unaffected by scale), but if Overpass is unreachable/blocked in a given
-// network, these still put SOME road tracing and city names on the image
-// instead of none at all. Requested at dpi:300 (well above the service's
-// default 96) since these are cartographic labels sized for on-screen
-// viewing at normal zoom -- at the default dpi they render legibly small
-// even at a modest real-world scale; the higher dpi scales their text and
-// line weight up along with everything else Esri renders into the image.
-// The road layer is drawn BEFORE our own route lines (same reasoning as
-// the Overpass road tracing: the route itself should stand out wherever it
-// runs along a road this layer also draws), but the place-name layer is
-// drawn AFTER them (see the draw call further down) -- a city name sitting
-// right on the route is the normal case here, and hiding it under the
-// route line would defeat the point of showing it at all.
-const ESRI_TRANSPORTATION_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/export';
-const ESRI_BOUNDARIES_PLACES_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/export';
 // Road tracing + labels (BR-xxx, RR-xxx...) are drawn ourselves from OSM
 // data (via Overpass) instead of using Esri's Reference/World_Transportation
 // raster overlay: that overlay is a pre-rendered cartographic layer whose
@@ -1833,7 +1813,7 @@ function _drawRouteImageAttribution(ctx, width, height) {
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
-  ctx.fillText('Imagery/Reference © Esri, Maxar, Earthstar Geographics, HERE, Garmin · Roads © OpenStreetMap contributors', 10 * s, height - 8 * s);
+  ctx.fillText('Imagery © Esri, Maxar, Earthstar Geographics · Roads © OpenStreetMap contributors', 10 * s, height - 8 * s);
   ctx.restore();
 }
 
@@ -1888,28 +1868,23 @@ window.exportRoutesImage = async function() {
     // Base satellite (requested lossless so the only JPEG compression that
     // ever happens is the final canvas.toBlob() below -- avoids the
     // double-recompression quality loss of re-saving an already-JPEG base),
-    // the two Esri "hybrid" reference overlays (roads + place names, see
-    // the note above ESRI_TRANSPORTATION_EXPORT_URL), the OSM road/ref
-    // data, and the cities inside the frame are all independent of each
-    // other, so fetch everything at once instead of one after another.
-    // The two reference overlays are best-effort: if either fails, the
-    // image still generates with just the satellite + our own overlays.
-    const [baseImg, transportationImg, placesImg, roadWaysRaw, citiesRaw] = await Promise.all([
+    // the OSM road/ref data, and the cities inside the frame are all
+    // independent of each other, so fetch all three at once instead of one
+    // after another. Road/city lookups are best-effort: if either fails,
+    // the image still generates with just the satellite + our own routes,
+    // and a toast at the end tells the person which labels are missing
+    // (instead of the image just quietly coming out without them).
+    let roadLookupFailed = false, cityLookupFailed = false;
+    const [baseImg, roadWaysRaw, citiesRaw] = await Promise.all([
       _fetchEsriMapImage(ESRI_WORLD_IMAGERY_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png24' }),
-      _fetchEsriMapImage(ESRI_TRANSPORTATION_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true, dpi: 300 }).catch(err => {
-        console.warn('Esri World_Transportation overlay indisponível:', err);
-        return null;
-      }),
-      _fetchEsriMapImage(ESRI_BOUNDARIES_PLACES_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true, dpi: 300 }).catch(err => {
-        console.warn('Esri World_Boundaries_and_Places overlay indisponível:', err);
-        return null;
-      }),
       _fetchRoadRefWaysInBBox(bbox).catch(err => {
         console.warn('Overpass road/ref lookup indisponível, seguindo só com satélite + rotas:', err);
+        roadLookupFailed = true;
         return [];
       }),
       _fetchCitiesInBBox(bbox).catch(err => {
         console.warn('Overpass city lookup indisponível, imagem sairá sem rótulos de cidade:', err);
+        cityLookupFailed = true;
         return [];
       })
     ]);
@@ -1946,11 +1921,6 @@ window.exportRoutesImage = async function() {
     canvas.height = ROUTE_IMAGE_HEIGHT;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(baseImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
-    // "Hybrid" road overlay (transparent PNG), aligned to the exact same
-    // bbox -- drawn under our own route lines on purpose, same as the
-    // Overpass road tracing below, so the route itself still stands out
-    // wherever it runs along a road this layer also draws.
-    if (transportationImg) ctx.drawImage(transportationImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
 
     const project = (lat, lng) => {
       const m = _lngLatToMercatorXY(lng, lat);
@@ -1985,13 +1955,6 @@ window.exportRoutesImage = async function() {
       ctx.shadowBlur = 0;
     });
 
-    // Place-name overlay (city/place labels only -- see
-    // ESRI_BOUNDARIES_PLACES_EXPORT_URL) drawn AFTER the route lines, on
-    // purpose unlike the road overlay above: a city name sitting right on
-    // the route itself is common (the route runs through the city), and
-    // the whole point of this layer is to be readable, not traced over.
-    if (placesImg) ctx.drawImage(placesImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
-
     // Road shield labels (BR-xxx, RR-xxx...) drawn AFTER the route lines,
     // fixed pixel size, so they stay legible even where a route runs right
     // along that road -- matching the reference export's layering.
@@ -2022,7 +1985,16 @@ window.exportRoutesImage = async function() {
       const safeCode = code.replace(/[\\/:*?"<>|]/g, '_');
       const fileName = safeCode ? `ROTA_ALTERNATIVA_${safeCode}.jpg` : 'ROTA_ALTERNATIVA.jpg';
       triggerDownload(blob, fileName);
-      const warning = !allowedHighwayRefs.size ? ' (nenhuma rodovia identificada no trajeto -- imagem sem rótulos de via)' : '';
+      // Named explicitly instead of just going quiet: a road/city lookup
+      // that failed used to leave the image silently without those labels
+      // with no indication why -- this at least tells the person it's a
+      // lookup problem (probably the Overpass service), not something
+      // wrong with their routes.
+      const warnings = [];
+      if (roadLookupFailed) warnings.push('sem rótulos de via (consulta ao OpenStreetMap falhou)');
+      else if (!allowedHighwayRefs.size) warnings.push('nenhuma rodovia identificada no trajeto -- imagem sem rótulos de via');
+      if (cityLookupFailed) warnings.push('sem rótulos de cidade (consulta ao OpenStreetMap falhou)');
+      const warning = warnings.length ? ` (${warnings.join('; ')})` : '';
       showToast(`⬇ Imagem <span class="accent">${fileName}</span> gerada${warning}`);
     }, 'image/jpeg', 0.95);
   } catch (err) {

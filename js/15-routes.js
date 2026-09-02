@@ -1184,18 +1184,23 @@ const ROUTE_IMAGE_HEIGHT = 1250; // ~16:10, matching the reference export's prop
 const ROUTE_IMAGE_PADDING_FRACTION = 0.12; // breathing room around the routes/marker
 const ESRI_WORLD_IMAGERY_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
 // "Hybrid" reference overlays (transparent PNG, roads+labels / place names)
-// drawn on top of the satellite base and under our own route lines --
-// exactly the Esri layers behind the standard "Imagery Hybrid" basemap
-// style. Added as a baseline fallback for road/city labeling: the
-// Overpass-based custom labels below are still tried first and drawn on
-// top when they succeed (bigger, fixed-pixel-size text, unaffected by
-// scale -- see the note above), but if Overpass is unreachable/blocked in
-// a given network, these still put SOME road tracing and city names on
-// the image instead of none at all. Same known trade-off documented below
-// still applies to these two layers specifically: they're pre-rendered at
-// whatever real-world scale the bbox implies, so their own baked-in label
-// text can come out small on a route spanning 100km+ -- acceptable for a
-// fallback, which is why the Overpass-drawn labels still take priority.
+// drawn on top of the satellite base -- exactly the Esri layers behind the
+// standard "Imagery Hybrid" basemap style. Added as a baseline fallback
+// for road/city labeling: the Overpass-based custom labels are still tried
+// first and drawn on top when they succeed (bigger, fixed-pixel-size text,
+// unaffected by scale), but if Overpass is unreachable/blocked in a given
+// network, these still put SOME road tracing and city names on the image
+// instead of none at all. Requested at dpi:300 (well above the service's
+// default 96) since these are cartographic labels sized for on-screen
+// viewing at normal zoom -- at the default dpi they render legibly small
+// even at a modest real-world scale; the higher dpi scales their text and
+// line weight up along with everything else Esri renders into the image.
+// The road layer is drawn BEFORE our own route lines (same reasoning as
+// the Overpass road tracing: the route itself should stand out wherever it
+// runs along a road this layer also draws), but the place-name layer is
+// drawn AFTER them (see the draw call further down) -- a city name sitting
+// right on the route is the normal case here, and hiding it under the
+// route line would defeat the point of showing it at all.
 const ESRI_TRANSPORTATION_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/export';
 const ESRI_BOUNDARIES_PLACES_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/export';
 // Road tracing + labels (BR-xxx, RR-xxx...) are drawn ourselves from OSM
@@ -1891,11 +1896,11 @@ window.exportRoutesImage = async function() {
     // image still generates with just the satellite + our own overlays.
     const [baseImg, transportationImg, placesImg, roadWaysRaw, citiesRaw] = await Promise.all([
       _fetchEsriMapImage(ESRI_WORLD_IMAGERY_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png24' }),
-      _fetchEsriMapImage(ESRI_TRANSPORTATION_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true }).catch(err => {
+      _fetchEsriMapImage(ESRI_TRANSPORTATION_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true, dpi: 300 }).catch(err => {
         console.warn('Esri World_Transportation overlay indisponível:', err);
         return null;
       }),
-      _fetchEsriMapImage(ESRI_BOUNDARIES_PLACES_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true }).catch(err => {
+      _fetchEsriMapImage(ESRI_BOUNDARIES_PLACES_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true, dpi: 300 }).catch(err => {
         console.warn('Esri World_Boundaries_and_Places overlay indisponível:', err);
         return null;
       }),
@@ -1941,12 +1946,11 @@ window.exportRoutesImage = async function() {
     canvas.height = ROUTE_IMAGE_HEIGHT;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(baseImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
-    // "Hybrid" reference overlays (roads + place names), transparent PNGs
-    // aligned to the exact same bbox -- see the note above
-    // ESRI_TRANSPORTATION_EXPORT_URL for why these are a baseline under our
-    // own Overpass-drawn labels rather than a replacement for them.
+    // "Hybrid" road overlay (transparent PNG), aligned to the exact same
+    // bbox -- drawn under our own route lines on purpose, same as the
+    // Overpass road tracing below, so the route itself still stands out
+    // wherever it runs along a road this layer also draws.
     if (transportationImg) ctx.drawImage(transportationImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
-    if (placesImg) ctx.drawImage(placesImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
 
     const project = (lat, lng) => {
       const m = _lngLatToMercatorXY(lng, lat);
@@ -1980,6 +1984,13 @@ window.exportRoutesImage = async function() {
       ctx.stroke();
       ctx.shadowBlur = 0;
     });
+
+    // Place-name overlay (city/place labels only -- see
+    // ESRI_BOUNDARIES_PLACES_EXPORT_URL) drawn AFTER the route lines, on
+    // purpose unlike the road overlay above: a city name sitting right on
+    // the route itself is common (the route runs through the city), and
+    // the whole point of this layer is to be readable, not traced over.
+    if (placesImg) ctx.drawImage(placesImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
 
     // Road shield labels (BR-xxx, RR-xxx...) drawn AFTER the route lines,
     // fixed pixel size, so they stay legible even where a route runs right

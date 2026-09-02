@@ -1229,7 +1229,13 @@ function _mercatorXToLng(x) {
 // apart. The actual filter is proximity to the routes themselves, applied
 // afterward in _filterRoadWaysNearRoute(): a road is only federal/state
 // *and relevant* here if the trip's own route actually runs along it.
-// Tries a second Overpass mirror if the first one fails/times out.
+// Tries a second Overpass mirror if the first one fails or times out --
+// each attempt goes through _fetchJsonResilient (same helper the OSRM
+// calls use) so a mirror that just hangs on a big bbox doesn't leave the
+// whole image generation stuck forever; a genuinely large area can still
+// take a while, so this gets a longer timeout than the OSRM calls do.
+const OVERPASS_BBOX_TIMEOUT_MS = 15000;
+
 async function _fetchRoadRefWaysInBBox(bbox) {
   const south = _mercatorYToLat(bbox.ymin);
   const north = _mercatorYToLat(bbox.ymax);
@@ -1237,23 +1243,16 @@ async function _fetchRoadRefWaysInBBox(bbox) {
   const east = _mercatorXToLng(bbox.xmax);
   const query = `[out:json][timeout:25];way(${south},${west},${north},${east})[highway][ref];out tags geom;`;
 
-  let lastErr = null;
   for (const endpoint of OVERPASS_ROAD_LABEL_ENDPOINTS) {
-    try {
-      const res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const ways = data.elements || [];
-      // Keep only refs that actually look like a Brazilian federal/state
-      // route number (e.g. "BR-174", "RR-203") -- filters out things like
-      // a local road's own name or a cycle-route ref sharing the `ref` tag.
-      return ways.filter(w => w.tags && /^[A-Z]{2,3}-?\s?\d/.test(String(w.tags.ref || '').trim()));
-    } catch (err) {
-      lastErr = err;
-      console.warn(`Overpass road lookup failed (${endpoint}):`, err);
-    }
+    const data = await _fetchJsonResilient(`${endpoint}?data=${encodeURIComponent(query)}`, { timeoutMs: OVERPASS_BBOX_TIMEOUT_MS, retries: 0 });
+    if (!data) continue; // this mirror failed/timed out -- try the next one
+    const ways = data.elements || [];
+    // Keep only refs that actually look like a Brazilian federal/state
+    // route number (e.g. "BR-174", "RR-203") -- filters out things like
+    // a local road's own name or a cycle-route ref sharing the `ref` tag.
+    return ways.filter(w => w.tags && /^[A-Z]{2,3}-?\s?\d/.test(String(w.tags.ref || '').trim()));
   }
-  throw lastErr || new Error('Todos os espelhos do Overpass falharam');
+  throw new Error('Todos os espelhos do Overpass falharam');
 }
 
 const ROUTE_IMAGE_CITY_MAX_LABELS = 8;         // caps how many city labels a wide frame can end up with
@@ -1273,19 +1272,11 @@ async function _fetchCitiesInBBox(bbox) {
   const east = _mercatorXToLng(bbox.xmax);
   const query = `[out:json][timeout:25];node(${south},${west},${north},${east})["place"~"^(city|town)$"];out body;`;
 
-  let lastErr = null;
   for (const endpoint of OVERPASS_ROAD_LABEL_ENDPOINTS) {
-    try {
-      const res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      return data.elements || [];
-    } catch (err) {
-      lastErr = err;
-      console.warn(`Overpass city lookup failed (${endpoint}):`, err);
-    }
+    const data = await _fetchJsonResilient(`${endpoint}?data=${encodeURIComponent(query)}`, { timeoutMs: OVERPASS_BBOX_TIMEOUT_MS, retries: 0 });
+    if (data) return data.elements || [];
   }
-  throw lastErr || new Error('Todos os espelhos do Overpass falharam');
+  throw new Error('Todos os espelhos do Overpass falharam');
 }
 
 // Narrows the raw Overpass hits down to what's actually worth labeling on
@@ -1444,7 +1435,31 @@ async function _fetchEsriMapImage(serviceUrl, bbox, width, height, extraParams) 
     format: 'jpg',
     f: 'image'
   }, extraParams || {}));
-  const res = await fetch(`${serviceUrl}?${params.toString()}`);
+
+  // Same reasoning as the Overpass calls above: a bare fetch() never times
+  // out on its own, and this is the one call in the whole export with no
+  // fallback (no satellite image, no photo at all) -- so if it hangs, the
+  // button used to just sit on "GERANDO IMAGEM…" forever with no error.
+  // One retry, since a dropped connection on a single large image request
+  // is common enough to be worth one more try before giving up.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OVERPASS_BBOX_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${serviceUrl}?${params.toString()}`, { signal: controller.signal });
+  } catch (err) {
+    clearTimeout(timer);
+    console.warn('Esri image fetch failed, retrying once:', err);
+    const controller2 = new AbortController();
+    const timer2 = setTimeout(() => controller2.abort(), OVERPASS_BBOX_TIMEOUT_MS);
+    try {
+      res = await fetch(`${serviceUrl}?${params.toString()}`, { signal: controller2.signal });
+    } finally {
+      clearTimeout(timer2);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const blob = await res.blob();
   const objUrl = URL.createObjectURL(blob);

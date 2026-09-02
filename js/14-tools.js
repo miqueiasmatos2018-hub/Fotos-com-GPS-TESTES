@@ -15,6 +15,7 @@
   let _markers     = [];
   let _tooltips    = [];
   let _totalDist   = 0;
+  let _totalTooltip = null;
 
   const measureBtn = document.getElementById('measureBtn');
   const banner     = document.getElementById('measureBanner');
@@ -29,6 +30,8 @@
     if (_polyline) { map.removeLayer(_polyline); _polyline = null; }
     _markers.forEach(m => map.removeLayer(m));  _markers = [];
     _tooltips.forEach(t => map.removeLayer(t)); _tooltips = [];
+    _totalTooltip = null;
+    if (banner) banner.textContent = '📏 Clique para marcar pontos · ESC para cancelar';
   }
 
   function onMapClick(e) {
@@ -62,11 +65,26 @@
         .setContent(formatDist(segDist))
         .addTo(map);
       _tooltips.push(tt);
+
+      // Distância acumulada. _totalDist já era somado, mas nunca aparecia
+      // em lugar nenhum -- só dava para ver trecho por trecho.
+      if (_totalDist > 0) {
+        if (_totalTooltip) map.removeLayer(_totalTooltip);
+        _totalTooltip = L.tooltip({
+          permanent: true, direction: 'right', className: 'measure-tooltip measure-total', offset: [10, 0]
+        }).setLatLng(p2).setContent(`Total: ${formatDist(_totalDist)}`).addTo(map);
+        _tooltips.push(_totalTooltip);
+      }
+      if (banner) banner.textContent = `📏 Total: ${formatDist(_totalDist)} · clique para continuar · ESC para encerrar`;
     }
   }
 
   function startMeasure() {
     _measuring = true;
+    // Sinalizador global: 01-map-core.js precisa saber que o clique cru do
+    // mapa está em uso, senão clicar perto de uma foto durante a medição
+    // abria o popup dela em vez de marcar o ponto.
+    window._measureActive = true;
     clearMeasure();
     measureBtn.classList.add('active');
     measureBtn.textContent = '✕ PARAR';
@@ -78,13 +96,21 @@
 
   function stopMeasure() {
     _measuring = false;
+    window._measureActive = false;
     measureBtn.classList.remove('active');
     measureBtn.textContent = '📏 MEDIR';
     banner.classList.remove('show');
     map.getContainer().style.cursor = '';
     map.off('click', onMapClick);
     document.removeEventListener('keydown', onEsc);
-    clearMeasure();
+    // A medida some da tela após um instante, em vez de desaparecer no
+    // mesmo clique em que a pessoa encerra -- dá tempo de ler o total.
+    if (_points.length > 1) {
+      showToast(`📏 Distância total: <span class="accent">${formatDist(_totalDist)}</span>`);
+      setTimeout(clearMeasure, 4000);
+    } else {
+      clearMeasure();
+    }
   }
 
   function onEsc(e) { if (e.key === 'Escape') stopMeasure(); }
@@ -105,18 +131,27 @@ window.alignToSNV = function() {
     });
   });
 
-  const ldInicio = features.find(f => f.name.includes('LD_INICIO_OAE'));
-  const ldFinal  = features.find(f => f.name.includes('LD_FINAL_OAE'));
-  const leInicio = features.find(f => f.name.includes('LE_INICIO_OAE'));
-  const leFinal  = features.find(f => f.name.includes('LE_FINAL_OAE'));
+  // "_OAE" é o sufixo mais comum, mas o ponto às vezes vem sem ele (ex:
+  // "LD_INICIO" puro) -- mesmo critério de substring já usado em
+  // 15-routes.js/08-kml.js para esses pontos.
+  const ldInicio = features.find(f => f.name.includes('LD_INICIO'));
+  const ldFinal  = features.find(f => f.name.includes('LD_FINAL'));
+  const leInicio = features.find(f => f.name.includes('LE_INICIO'));
+  const leFinal  = features.find(f => f.name.includes('LE_FINAL'));
 
   // Need at least one LD and one LE point to compute bearing
   const bottomPt = ldInicio?.latlng || ldFinal?.latlng;
   const topPt    = leInicio?.latlng || leFinal?.latlng;
 
   if (!bottomPt || !topPt) {
-    const missing = !bottomPt ? 'LD_INICIO_OAE / LD_FINAL_OAE' : 'LE_INICIO_OAE / LE_FINAL_OAE';
+    const missing = !bottomPt ? 'LD_INICIO / LD_FINAL' : 'LE_INICIO / LE_FINAL';
     showToast(`⚠️ Pontos <span class="accent">${missing}</span> não encontrados no KML`);
+    return;
+  }
+  // Dois pontos exatamente coincidentes deixam o azimute indefinido: o
+  // atan2(0,0) devolvia 0 e o mapa girava para um ângulo sem sentido.
+  if (Math.abs(bottomPt.lat - topPt.lat) < 1e-9 && Math.abs(bottomPt.lng - topPt.lng) < 1e-9) {
+    showToast('⚠️ Pontos LD e LE estão na mesma coordenada — não dá para calcular o alinhamento');
     return;
   }
 
@@ -188,14 +223,19 @@ window.toggleMeasure = function() {
   // ── Minimize / expand ──────────────────────────────────────────────────────
   if (toggle) {
     toggle.addEventListener('click', () => {
+      // A largura precisa ser lida ANTES de aplicar a classe: a versão
+      // anterior media depois, quando o CSS já tinha imposto os 32px do
+      // estado minimizado, então expandir devolvia um painel de 32px em
+      // vez da largura que a pessoa tinha ajustado.
+      const wasMin = sidebar.classList.contains('minimized');
+      if (!wasMin) {
+        const w = sidebar.getBoundingClientRect().width;
+        if (w > 60) _lastW = w;
+      }
       const isMin = sidebar.classList.toggle('minimized');
       toggle.textContent = isMin ? '▶' : '◀';
       toggle.title = isMin ? 'Expandir painel' : 'Minimizar painel';
-      if (!isMin) {
-        sidebar.style.width = _lastW + 'px';
-      } else {
-        _lastW = sidebar.getBoundingClientRect().width;
-      }
+      if (!isMin) sidebar.style.width = _lastW + 'px';
       // Toggle DNIT layer panel visibility with sidebar
       const layerPanel = document.querySelector('.layer-panel');
       if (layerPanel) layerPanel.style.display = isMin ? 'none' : '';

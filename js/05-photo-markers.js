@@ -7,33 +7,62 @@
 // see the <script> tags at the bottom of index.html.
 // ==========================================================================
 
+// Declarado aqui em cima porque showDetail() precisa dele para reaplicar o
+// modo de edição a cada re-render (antes, qualquer atualização do painel
+// desligava a edição sem mudar o rótulo do botão).
+let metaEditMode = false;
+
+// A célula "Data" do painel de detalhes é editada como o mesmo texto já
+// formatado (dd/mm/aaaa, hh:mm:ss) que aparece na tela -- precisa ser
+// reconvertida para um objeto Date (o mesmo tipo que o EXIF já traz ao ser
+// lido) antes de gravar em photo.exif.DateTimeOriginal. Sem isso,
+// _buildExifObject (06-export.js) recebia uma string nesse formato, não
+// reconhecia e não conseguia escrever a data nova no arquivo exportado.
+function _parsePtBrDateTime(text) {
+  const m = String(text).trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})[,]?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const [, d, mo, y, h, mi, s] = m;
+  const date = new Date(+y, +mo - 1, +d, +h, +mi, s ? +s : 0);
+  return isNaN(date.getTime()) ? null : date;
+}
+
 function buildPhotoPopupHtml(photo) {
   const exif = photo.exif || {};
   const id = photo.id;
+  const hasGps = photo.lat != null && photo.lng != null;
+  const latVal  = photo.lat != null ? photo.lat.toFixed(8) : '';
+  const lngVal  = photo.lng != null ? photo.lng.toFixed(8) : '';
+  const dateVal = exif.DateTimeOriginal ? formatDate(exif.DateTimeOriginal) : '';
+  // data-original guarda o valor exibido em cada campo -- savePopupEdits usa
+  // isso para só regravar o que a pessoa realmente editou (ver comentário lá).
   return `
     <div class="popup-content" style="min-width:220px">
-      <img class="popup-img" src="${photo.url}" alt="${photo.name}">
+      <img class="popup-img" src="${photo.url}" alt="" loading="lazy">
       <input class="popup-edit-name" data-field="name" data-id="${id}"
-        value="${photo.name.replace(/"/g,'&quot;')}" maxlength="80" spellcheck="false">
+        data-original="${escapeHtml(photo.name)}"
+        value="${escapeHtml(photo.name)}" maxlength="120" spellcheck="false">
       <div class="popup-edit-row">
         <span class="popup-edit-label">GPS Lat</span>
         <input class="popup-edit-input" data-field="lat" data-id="${id}"
-          value="${photo.lat != null ? photo.lat.toFixed(8) : ''}" placeholder="—" type="number" step="any">
+          data-original="${latVal}"
+          value="${latVal}" placeholder="—" type="number" step="any">
       </div>
       <div class="popup-edit-row">
         <span class="popup-edit-label">GPS Lng</span>
         <input class="popup-edit-input" data-field="lng" data-id="${id}"
-          value="${photo.lng != null ? photo.lng.toFixed(8) : ''}" placeholder="—" type="number" step="any">
+          data-original="${lngVal}"
+          value="${lngVal}" placeholder="—" type="number" step="any">
       </div>
       <div class="popup-edit-row">
         <span class="popup-edit-label">Data</span>
         <input class="popup-edit-input" data-field="DateTimeOriginal" data-id="${id}"
-          value="${exif.DateTimeOriginal ? formatDate(exif.DateTimeOriginal) : ''}" placeholder="—">
+          data-original="${escapeHtml(dateVal)}"
+          value="${escapeHtml(dateVal)}" placeholder="—">
       </div>
       <div class="popup-btn-row">
         <button class="popup-save-btn" onclick="savePopupEdits('${id}')">SALVAR</button>
-        <button class="popup-relocate-btn" onclick="startRelocateMode('${id}')" title="Click map to redefine location">🗺</button>
-        <button class="popup-relocate-btn" onclick="openSVAtMarker(${photo.lat}, ${photo.lng})" title="Abrir no Google Maps">🌐</button>
+        <button class="popup-relocate-btn" onclick="startRelocateMode('${id}')" title="Clicar no mapa para redefinir a localização">🗺</button>
+        ${hasGps ? `<button class="popup-relocate-btn" onclick="openSVAtMarker(${photo.lat}, ${photo.lng})" title="Abrir no Google Maps">🌐</button>` : ''}
       </div>
     </div>
   `;
@@ -55,10 +84,17 @@ window.savePopupEdits = function(id) {
   el.querySelectorAll('[data-field]').forEach(input => {
     const field = input.dataset.field;
     const val = input.value.trim();
+    // Reabrir o popup (ex: depois de reposicionar pelo 🗺) e clicar SALVAR
+    // sem tocar em tudo regravava TODOS os campos exibidos -- inclusive a
+    // Data, convertendo-a do objeto original para o texto já formatado
+    // (dd/mm/aaaa) que aparecia no campo. Isso corrompia a Data gravada no
+    // EXIF exportado (alguns visualizadores caíam de volta para a data de
+    // modificação do arquivo). Agora um campo que não foi tocado é ignorado.
+    if (val === (input.dataset.original || '')) return;
     if (field === 'name') {
       if (val) {
         photo.name = val;
-        // update sidebar list item
+        // atualiza o item da barra lateral (textContent já escapa sozinho)
         const listItem = document.querySelector(`.photo-item[data-id="${id}"]`);
         if (listItem) {
           const nameText = listItem.querySelector('.photo-name-text');
@@ -88,9 +124,24 @@ window.savePopupEdits = function(id) {
   // Re-attach events after content swap
   setTimeout(() => attachPopupEvents(id), 50);
 
-  // Update detail panel if active
+  // Atualiza o painel de detalhes se esta for a foto ativa
   if (activeId == id) showDetail(photo);
-  showToast('Photo updated ✓');
+
+  // A edição pode ter mudado nome (ordem da lista) e coordenadas (contagem
+  // de GPS / duplicatas). Antes nada disso era atualizado até recarregar.
+  const listItem = document.querySelector(`.photo-item[data-id="${id}"]`);
+  if (listItem) {
+    const coordEl = listItem.querySelector('.photo-coords');
+    if (coordEl && photo.lat != null) {
+      coordEl.textContent = `${photo.lat.toFixed(5)}, ${photo.lng.toFixed(5)}`;
+      coordEl.className = 'photo-coords has-gps';
+    }
+  }
+  renderSortedList();
+  refreshDateTimeline();
+  updateStats();
+  checkDuplicateGps();
+  showToast('Foto atualizada ✓');
 };
 
 function attachPopupEvents(id) {
@@ -153,8 +204,9 @@ window.startRelocateMode = function(id) {
       m.openPopup();
       setTimeout(() => attachPopupEvents(_pickingForId), 60);
     } else {
-      // photo had no GPS before — create marker now
+      // a foto não tinha GPS antes -- cria o marcador agora
       addMarker(photo);
+      updateStats();
       markers[photo.id].openPopup();
       // update list item GPS display
       const listItem = document.querySelector(`.photo-item[data-id="${photo.id}"]`);
@@ -182,7 +234,7 @@ window.startRelocateMode = function(id) {
     }
 
     if (activeId == photo.id) showDetail(photo);
-    showToast(`📍 Location set — <span class="accent">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`);
+    showToast(`📍 Localização definida — <span class="accent">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`);
     cancelRelocateMode();
   };
 
@@ -249,8 +301,9 @@ function selectPhoto(id) {
   const photo = photos.find(p => p.id == id);
   if (!photo) return;
 
-  // Activate list item
-  const listItem = document.querySelector(`[data-id="${id}"]`);
+  // Ativa o item da lista -- escopo em .photo-item de propósito: um seletor
+  // solto por [data-id] podia casar com outro elemento da interface.
+  const listItem = document.querySelector(`.photo-item[data-id="${id}"]`);
   if (listItem) {
     listItem.classList.add('active');
     listItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -271,22 +324,10 @@ function selectPhoto(id) {
 
 function showDetail(photo) {
   const exif = photo.exif || {};
-  // editable fields: [key, label, exifKey, format hint]
-  const editableFields = [
-    ['DateTimeOriginal', 'Data', 'datetime-local'],
-    ['Make', 'Marca da Câmera', 'text'],
-    ['Model', 'Modelo da Câmera', 'text'],
-    ['LensModel', 'Lente', 'text'],
-    ['FocalLength', 'Distancia Focal (mm)', 'number'],
-    ['FNumber', 'Abertura (f/)', 'number'],
-    ['ISO', 'ISO', 'number'],
-    ['Software', 'Software', 'text'],
-    ['GPSAltitude', 'GPS Alt (m)', 'number'],
-  ];
 
   const fields = [
     ['Nome do Arquivo', photo.name, null],
-    ['Tamanho do Arquivo', formatSize(photo.file.size), null],
+    ['Tamanho do Arquivo', photo.file ? formatSize(photo.file.size) : '—', null],
     ['Dimensões', exif.ImageWidth ? `${exif.ImageWidth} × ${exif.ImageHeight}` : '—', null],
     ['Data', exif.DateTimeOriginal ? formatDate(exif.DateTimeOriginal) : '—', 'DateTimeOriginal'],
     ['Marca da Câmera', exif.Make || '—', 'Make'],
@@ -305,10 +346,11 @@ function showDetail(photo) {
 
   detailRows.innerHTML = fields.map(([k, v, metaKey]) => {
     const canEdit = metaKey !== null;
+    const sv = escapeHtml(v);
     return `
       <div class="detail-row${canEdit ? ' editable' : ''}" data-meta-key="${metaKey || ''}">
         <span class="detail-key">${k}</span>
-        <span class="detail-val" ${canEdit ? `contenteditable="false" data-original="${v}" data-photo-id="${photo.id}"` : ''}>${v}</span>
+        <span class="detail-val" ${canEdit ? `contenteditable="${metaEditMode}" data-original="${sv}" data-photo-id="${photo.id}"` : ''}>${sv}</span>
       </div>
     `;
   }).join('');
@@ -327,11 +369,28 @@ function showDetail(photo) {
 }
 
 function commitMetaEdit(el, photo) {
-  pushUndo(photo);
   const row = el.closest('.detail-row');
   const metaKey = row.dataset.metaKey;
   const newVal = el.textContent.trim();
+  // pushUndo vinha ANTES desta guarda: só entrar e sair de um campo sem
+  // digitar nada já empilhava um "desfazer" vazio, e o Ctrl+Z precisava ser
+  // apertado várias vezes para surtir efeito.
   if (!newVal || newVal === el.dataset.original) return;
+
+  // Valida a Data ANTES de empilhar o undo/aplicar qualquer coisa -- uma
+  // data com formato inválido não deve deixar um "desfazer" vazio na pilha
+  // nem sobrescrever o valor válido que já estava lá.
+  let parsedDate = null;
+  if (metaKey === 'DateTimeOriginal') {
+    parsedDate = _parsePtBrDateTime(newVal);
+    if (!parsedDate) {
+      showToast('⚠️ Data inválida — use o formato dd/mm/aaaa, hh:mm:ss');
+      el.textContent = el.dataset.original;
+      return;
+    }
+  }
+
+  pushUndo(photo);
 
   // Persist into photo object
   if (metaKey === 'lat') {
@@ -340,6 +399,9 @@ function commitMetaEdit(el, photo) {
   } else if (metaKey === 'lng') {
     const v = parseFloat(newVal);
     if (!isNaN(v)) { photo.lng = v; photo.exif.longitude = v; }
+  } else if (metaKey === 'DateTimeOriginal') {
+    if (!photo.exif) photo.exif = {};
+    photo.exif.DateTimeOriginal = parsedDate;
   } else {
     if (!photo.exif) photo.exif = {};
     const numFields = ['FocalLength', 'FNumber', 'ISO', 'GPSAltitude'];
@@ -353,29 +415,21 @@ function commitMetaEdit(el, photo) {
   dot.classList.add('show');
   setTimeout(() => dot.classList.remove('show'), 1800);
 
-  // Update marker popup if it exists
+  // Atualiza o popup do marcador, se existir
   if (markers[photo.id]) {
-    const exif = photo.exif || {};
-    const rows = [
-      ['Coordinates', photo.lat != null ? `${photo.lat.toFixed(6)}, ${photo.lng.toFixed(6)}` : '—'],
-      exif.DateTimeOriginal ? ['Data', formatDate(exif.DateTimeOriginal)] : null,
-      exif.Make ? ['Camera', `${exif.Make || ''} ${exif.Model || ''}`.trim()] : null,
-    ].filter(Boolean);
-    const rowsHtml = rows.map(([k, v]) => `<div class="popup-row">${k} <span>${v}</span></div>`).join('');
-markers[photo.id].setPopupContent(buildPhotoPopupHtml(photo));
+    markers[photo.id].setPopupContent(buildPhotoPopupHtml(photo));
 
-    // Update marker position if GPS changed
-    if (metaKey === 'lat' || metaKey === 'lng') {
-      if (photo.lat != null && photo.lng != null) {
-        markers[photo.id].setLatLng([photo.lat, photo.lng]);
-      }
+    if ((metaKey === 'lat' || metaKey === 'lng') && photo.lat != null && photo.lng != null) {
+      markers[photo.id].setLatLng([photo.lat, photo.lng]);
+      const item = document.querySelector(`.photo-item[data-id="${photo.id}"] .photo-coords`);
+      if (item) item.textContent = `${photo.lat.toFixed(5)}, ${photo.lng.toFixed(5)}`;
+      checkDuplicateGps();
     }
   }
 
-  showToast(`<span class="accent">${metaKey}</span> updated`);
+  showToast(`<span class="accent">${escapeHtml(metaKey)}</span> atualizado`);
 }
 
-let metaEditMode = false;
 window.toggleMetaEdit = function() {
   metaEditMode = !metaEditMode;
   const btn = document.getElementById('editMetaBtn');

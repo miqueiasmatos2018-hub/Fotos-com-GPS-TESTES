@@ -21,11 +21,26 @@ window.switchTab = function(tab) {
   if (typeof _setMedidasLayerVisible === 'function') {
     _setMedidasLayerVisible(tab === 'medidas');
   }
-  ['photos','pontos','rotas','medidas'].forEach(t => {
+  // Refresh "Data Inspeção" (most recent photo date) every time the Dados
+  // tab is opened -- covers the case where photos were added/removed
+  // without ever touching a structure card.
+  if (tab === 'medidas' && typeof _updateInspectionDate === 'function') {
+    _updateInspectionDate();
+  }
+  // Elementos/Nomes cover the whole screen and don't use the sidebar, so
+  // floating sidebar controls (like the collapse toggle) that sit at a
+  // higher z-index than the overlay would otherwise poke through on top
+  // of it -- this class lets CSS hide them specifically for these tabs.
+  document.body.classList.toggle('fullscreen-tab-active', tab === 'elementos' || tab === 'nomes');
+  ['photos','pontos','rotas','medidas','elementos','nomes'].forEach(t => {
     const btn = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
     const content = document.getElementById('tabContent' + t.charAt(0).toUpperCase() + t.slice(1));
     if (btn)     btn.classList.toggle('active',     t === tab);
     if (content) content.classList.toggle('active', t === tab);
+  });
+  // Header animation on the right swaps to match whichever tab is open.
+  document.querySelectorAll('.tab-anim').forEach(a => {
+    a.classList.toggle('active', a.classList.contains('tab-anim-' + tab));
   });
 };
 
@@ -54,35 +69,82 @@ window.applyBulkEdit = function() {
     .filter(f => f.val !== '');
 
   if (!toApply.length) {
-    showToast('No fields filled in');
+    showToast('Nenhum campo preenchido');
+    return;
+  }
+  if (!photos.length) {
+    showToast('Nenhuma foto carregada');
     return;
   }
 
-  let count = 0;
+  const touchesGps = toApply.some(f => f.metaKey === 'lat' || f.metaKey === 'lng');
+
   photos.forEach(photo => {
     if (!photo.exif) photo.exif = {};
+    // pushUndo ficava DENTRO do laço de campos: aplicar 5 campos empilhava
+    // 5 estados idênticos por foto, e desfazer exigia 5 Ctrl+Z para voltar
+    // um passo. Um instantâneo por foto é o suficiente.
+    pushUndo(photo);
+
     toApply.forEach(f => {
-      pushUndo(photo);
-      if (f.metaKey === 'lat') { photo.lat = parseFloat(f.val); }
-      else if (f.metaKey === 'lng') { photo.lng = parseFloat(f.val); }
+      // Mesma guarda contra NaN usada em savePopupEdits/commitMetaEdit: sem
+      // ela, um valor inválido no campo de lat/lng em massa gravava NaN nas
+      // coordenadas de todas as fotos e quebrava os marcadores no mapa.
+      if (f.metaKey === 'lat') { const v = parseFloat(f.val); if (!isNaN(v)) { photo.lat = v; photo.exif.latitude = v; } }
+      else if (f.metaKey === 'lng') { const v = parseFloat(f.val); if (!isNaN(v)) { photo.lng = v; photo.exif.longitude = v; } }
       else { photo.exif[f.metaKey] = f.num ? parseFloat(f.val) : f.val; }
-      count++;
     });
-    // Update map markers for GPS changes
-    if (photo.lat != null && photo.lng != null && markers[photo.id]) {
-      markers[photo.id].setLatLng([photo.lat, photo.lng]);
+
+    if (photo.lat != null && photo.lng != null) {
+      if (markers[photo.id]) {
+        markers[photo.id].setLatLng([photo.lat, photo.lng]);
+        markers[photo.id].setPopupContent(buildPhotoPopupHtml(photo));
+      } else {
+        // A foto ganhou GPS agora: antes o marcador simplesmente não era
+        // criado, então a coordenada existia no EXIF exportado mas a foto
+        // nunca aparecia no mapa.
+        addMarker(photo);
+      }
+      const item = document.querySelector(`.photo-item[data-id="${photo.id}"]`);
+      if (item) {
+        const coordEl = item.querySelector('.photo-coords');
+        if (coordEl) {
+          coordEl.textContent = `${photo.lat.toFixed(5)}, ${photo.lng.toFixed(5)}`;
+          coordEl.className = 'photo-coords has-gps';
+        }
+        const badge = item.querySelector('.photo-badge');
+        if (badge) badge.className = 'photo-badge gps';
+      }
     }
   });
 
-  // Clear inputs
+  // Limpa os campos
   toApply.forEach(f => { document.getElementById(f.id).value = ''; });
 
-  showToast('<span class="accent">' + toApply.length + ' field' + (toApply.length > 1 ? 's' : '') + '</span> applied to ' + photos.length + ' photos');
+  // A barra lateral, as estatísticas e o painel de detalhes não eram
+  // atualizados depois de uma edição em massa.
+  updateStats();
+  refreshDateTimeline();
+  renderSortedList();
+  if (touchesGps) {
+    checkDuplicateGps();
+    if (photos.some(p => p.lat != null)) {
+      emptyState.style.display = 'none';
+      document.getElementById('fitAllBtn').style.display = 'block';
+      document.getElementById('clearBtn').style.display = 'block';
+    }
+  }
+  if (activeId != null) {
+    const active = photos.find(p => p.id === activeId);
+    if (active) showDetail(active);
+  }
+
+  showToast('<span class="accent">' + toApply.length + ' campo' + (toApply.length > 1 ? 's' : '') + '</span> aplicado' + (toApply.length > 1 ? 's' : '') + ' a ' + photos.length + ' foto' + (photos.length > 1 ? 's' : ''));
 };
 
 window.autoLoadKmlFromFolder = async function() {
   if (!window.showDirectoryPicker) {
-    showToast('File System Access API not supported in this browser');
+    showToast('Este navegador não suporta seleção de pasta (File System Access API)');
     return;
   }
 
@@ -106,7 +168,7 @@ window.autoLoadKmlFromFolder = async function() {
 
   if (!kmlHandles.length) {
     desc.textContent = 'Nenhum KML/KMZ encontrado na pasta';
-    showToast('No KML/KMZ files found in folder');
+    showToast('Nenhum arquivo KML/KMZ encontrado na pasta');
     return;
   }
 
@@ -118,5 +180,5 @@ window.autoLoadKmlFromFolder = async function() {
   }
 
   desc.textContent = `${kmlHandles.length} arquivo(s) carregado(s) de: ${dirHandle.name}/`;
-  showToast('<span class="accent">' + kmlHandles.length + ' KML/KMZ</span> loaded from folder');
+  showToast('<span class="accent">' + kmlHandles.length + ' KML/KMZ</span> carregado(s) da pasta');
 };

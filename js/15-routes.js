@@ -2274,7 +2274,7 @@ window.exportRoutesImage = async function() {
     }, 'image/jpeg', 0.95);
   } catch (err) {
     console.error('Falha ao gerar imagem da rota:', err);
-    showToast('⚠ Não foi possível gerar a imagem — falha ao obter a imagem de satélite (verifique a conexão)');
+    showToast(`⚠ Não foi possível gerar a imagem — ${err && err.message ? err.message : 'erro desconhecido'} (veja o console para detalhes)`);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
   }

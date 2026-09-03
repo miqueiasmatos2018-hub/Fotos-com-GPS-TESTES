@@ -77,7 +77,7 @@ async function _fetchJsonResilient(url, { timeoutMs = OSRM_TIMEOUT_MS, retries =
     } catch (err) {
       clearTimeout(timer);
       if (attempt === retries) {
-        console.error('OSRM fetch failed (giving up):', url, err);
+        console.error('Fetch falhou (desistindo após retry):', url, err);
         return null;
       }
       await _sleep(OSRM_RETRY_BACKOFF_MS);
@@ -1997,6 +1997,18 @@ window.exportRoutesImage = async function() {
     _drawRoadRefLines(ctx, roadWays, project);
     _drawRoadRefShieldLabels(ctx, roadWays, project);
 
+    // Diagnostic trail for when the highway tracing/labels don't show up
+    // on the image: this prints exactly where in the pipeline it came up
+    // empty (no refs recognized in the route's own steps? Overpass
+    // returned nothing? found roads but none close enough to the route?),
+    // instead of leaving that a mystery.
+    console.log('[ROTA IMG] rodovias reconhecidas na rota:', [...allowedHighwayRefs]);
+    console.log('[ROTA IMG] vias do Overpass no enquadramento:', roadWaysRaw.length,
+      roadLookupFailed ? '(consulta falhou)' : '');
+    console.log('[ROTA IMG] vias que batem com a rota (allowed):', roadWaysAllowed.length);
+    console.log('[ROTA IMG] vias desenhadas (perto da rota + fora dela na moldura):',
+      roadWaysOnRoute.length, '+', roadWaysOffRoute.length, '=', roadWays.length);
+
     LD_INICIO_POINTS.forEach(p => {
       const [px, py] = project(p.lat, p.lng);
       _drawPinMarker(ctx, px, py, LD_INICIO_COLOR);
@@ -2030,7 +2042,10 @@ window.exportRoutesImage = async function() {
       const warnings = [];
       if (roadLookupFailed) warnings.push('sem rótulos de via (consulta ao OpenStreetMap falhou)');
       else if (!allowedHighwayRefs.size) warnings.push('nenhuma rodovia identificada no trajeto -- imagem sem rótulos de via');
+      else if (!roadWays.length) warnings.push(`${roadWaysRaw.length} vias encontradas no OSM, nenhuma perto da rota`);
+      else warnings.push(`${roadWays.length} vias marcadas`);
       if (cityLookupFailed) warnings.push('sem rótulos de cidade (consulta ao OpenStreetMap falhou)');
+      else warnings.push(`${citiesForImage.length} cidades marcadas`);
       const warning = warnings.length ? ` (${warnings.join('; ')})` : '';
       showToast(`⬇ Imagem <span class="accent">${fileName}</span> gerada${warning}`);
     }, 'image/jpeg', 0.95);

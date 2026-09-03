@@ -1509,6 +1509,7 @@ function _normalizeCityEntry(c) {
 }
 
 
+const ROAD_NEAR_ROUTE_THRESHOLD_KM = 0.1; // ~100m -- generous enough for OSM/OSRM alignment slack, tight enough to exclude a parallel road
 const ROAD_NEAR_ROUTE_GRID_CELL_DEG = 0.001; // ~110m cells -- close to the threshold itself
 
 // Buckets route points into a lat/lng grid so "is there a route point near

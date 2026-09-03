@@ -1195,8 +1195,8 @@ const ESRI_WORLD_IMAGERY_EXPORT_URL = 'https://server.arcgisonline.com/ArcGIS/re
 // regardless of how much real-world distance the frame covers -- the same
 // "same size at any zoom" property already true of the app's own map.
 const OVERPASS_ROAD_LABEL_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter'
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter'
 ];
 const ROAD_LABEL_MIN_SPACING_PX = 260; // per ref, so a long highway gets repeated labels, not a cluster
 
@@ -1221,27 +1221,49 @@ function _mercatorXToLng(x) {
 }
 
 // Fetches OSM ways carrying a route-number ref inside the given (Mercator)
-// bbox -- the raw material for drawing our own road tracing + labels.
-// No highway-class restriction here anymore (motorway/primary/secondary
-// only ended up excluding real state highways that OSM happens to tag as
+// Fetches OSM ways carrying a route-number ref near the route itself --
+// the raw material for drawing our own road tracing + labels.
+// No highway-class restriction here (motorway/primary/secondary only ended
+// up excluding real state highways that OSM happens to tag as
 // tertiary/unclassified in this region) -- classification turned out to be
 // an unreliable way to tell "federal/state" from "municipal/vicinal"
-// apart. The actual filter is proximity to the routes themselves, applied
-// afterward in _filterRoadWaysNearRoute(): a road is only federal/state
-// *and relevant* here if the trip's own route actually runs along it.
-// Tries a second Overpass mirror if the first one fails or times out --
-// each attempt goes through _fetchJsonResilient (same helper the OSRM
-// calls use) so a mirror that just hangs on a big bbox doesn't leave the
-// whole image generation stuck forever; a genuinely large area can still
-// take a while, so this gets a longer timeout than the OSRM calls do.
-const OVERPASS_BBOX_TIMEOUT_MS = 15000;
+// apart. The actual filter is proximity to the route itself, applied both
+// here (a narrow corridor query, not a bounding rectangle) and again
+// client-side in _filterRoadWaysNearRoute(): a road is only
+// federal/state *and relevant* here if the trip's own route actually runs
+// along it.
+//
+// This used to scan the whole rectangular bbox in one go
+// (way(south,west,north,east)[highway][ref]) -- for a route spanning
+// hundreds of km that meant asking Overpass to scan a huge, mostly-empty
+// rectangle, which reliably timed out server-side (504) even on a mirror
+// that's otherwise reachable. Querying a narrow corridor around a
+// sampling of the route's own points instead keeps the search area small
+// regardless of how long the route is, so it stays fast at any route
+// length. The trade-off: a highway that crosses through the image's frame
+// without the route ever running near it no longer gets drawn -- only
+// highways the route itself uses do, which is the part that actually
+// matters here.
+const OVERPASS_BBOX_TIMEOUT_MS = 20000; // a bit under Overpass's own [timeout:25]
+const ROUTE_IMAGE_CORRIDOR_SAMPLES = 14;    // how many points along the route get their own around: clause
+const ROUTE_IMAGE_ROAD_RADIUS_M = 6000;     // 6km either side of each sample point
+const ROUTE_IMAGE_CITY_RADIUS_M = 15000;    // cities are sparser and often sit a bit off the highway itself
 
-async function _fetchRoadRefWaysInBBox(bbox) {
-  const south = _mercatorYToLat(bbox.ymin);
-  const north = _mercatorYToLat(bbox.ymax);
-  const west = _mercatorXToLng(bbox.xmin);
-  const east = _mercatorXToLng(bbox.xmax);
-  const query = `[out:json][timeout:25];way(${south},${west},${north},${east})[highway][ref];out tags geom;`;
+// Evenly-spaced subset of a route's coordinate list, so a corridor query
+// stays a fixed, small size no matter how many points the OSRM polyline
+// actually has.
+function _sampleRoutePoints(routePts, maxPoints) {
+  if (routePts.length <= maxPoints) return routePts;
+  const step = (routePts.length - 1) / (maxPoints - 1);
+  const out = [];
+  for (let i = 0; i < maxPoints; i++) out.push(routePts[Math.round(i * step)]);
+  return out;
+}
+
+async function _fetchRoadRefWaysNearRoute(routePts) {
+  const samples = _sampleRoutePoints(routePts, ROUTE_IMAGE_CORRIDOR_SAMPLES);
+  const clauses = samples.map(p => `way(around:${ROUTE_IMAGE_ROAD_RADIUS_M},${p.lat},${p.lng})[highway][ref];`).join('');
+  const query = `[out:json][timeout:25];(${clauses});out tags geom;`;
 
   for (const endpoint of OVERPASS_ROAD_LABEL_ENDPOINTS) {
     const data = await _fetchJsonResilient(`${endpoint}?data=${encodeURIComponent(query)}`, { timeoutMs: OVERPASS_BBOX_TIMEOUT_MS, retries: 0 });
@@ -1258,19 +1280,14 @@ async function _fetchRoadRefWaysInBBox(bbox) {
 const ROUTE_IMAGE_CITY_MAX_LABELS = 8;         // caps how many city labels a wide frame can end up with
 
 // Fetches settlements (city/town only -- see _pickCitiesForImage for why
-// villages are excluded) inside the same bbox used for the satellite base
-// image and road labels, so the exported photo can show which cities
-// appear in frame -- same Overpass endpoints/shape as
-// _fetchRoadRefWaysInBBox above and _fetchCidadesNear in 16-medidas.js
-// (that one searches by radius around a single point; this one searches
-// the whole rectangular frame instead, which is what an image caption
-// needs).
-async function _fetchCitiesInBBox(bbox) {
-  const south = _mercatorYToLat(bbox.ymin);
-  const north = _mercatorYToLat(bbox.ymax);
-  const west = _mercatorXToLng(bbox.xmin);
-  const east = _mercatorXToLng(bbox.xmax);
-  const query = `[out:json][timeout:25];node(${south},${west},${north},${east})["place"~"^(city|town)$"];out body;`;
+// villages are excluded) near the route, same corridor-query reasoning as
+// _fetchRoadRefWaysNearRoute above -- a rectangular bbox scan over a
+// route spanning hundreds of km is what was timing out, not the city
+// search itself.
+async function _fetchCitiesNearRoute(routePts) {
+  const samples = _sampleRoutePoints(routePts, ROUTE_IMAGE_CORRIDOR_SAMPLES);
+  const clauses = samples.map(p => `node(around:${ROUTE_IMAGE_CITY_RADIUS_M},${p.lat},${p.lng})["place"~"^(city|town)$"];`).join('');
+  const query = `[out:json][timeout:25];(${clauses});out body;`;
 
   for (const endpoint of OVERPASS_ROAD_LABEL_ENDPOINTS) {
     const data = await _fetchJsonResilient(`${endpoint}?data=${encodeURIComponent(query)}`, { timeoutMs: OVERPASS_BBOX_TIMEOUT_MS, retries: 0 });
@@ -1916,44 +1933,31 @@ window.exportRoutesImage = async function() {
     let roadLookupFailed = false, cityLookupFailed = false;
     const [baseImg, roadWaysRaw, citiesRaw] = await Promise.all([
       _fetchEsriMapImage(ESRI_WORLD_IMAGERY_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png24' }),
-      _fetchRoadRefWaysInBBox(bbox).catch(err => {
+      _fetchRoadRefWaysNearRoute(routePts).catch(err => {
         console.warn('Overpass road/ref lookup indisponível, seguindo só com satélite + rotas:', err);
         roadLookupFailed = true;
         return [];
       }),
-      _fetchCitiesInBBox(bbox).catch(err => {
+      _fetchCitiesNearRoute(routePts).catch(err => {
         console.warn('Overpass city lookup indisponível, imagem sairá sem rótulos de cidade:', err);
         cityLookupFailed = true;
         return [];
       })
     ]);
     const citiesForImage = _pickCitiesForImage(citiesRaw);
-    // First keep only the roads actually part of the alternative route's
+    // Keep only the roads actually part of the alternative route's
     // trajeto, then (as a safety net) only the portions of those roads
-    // that genuinely run near one of the built routes -- see
-    // _filterRoadWaysNearRoute() for why that second step still matters
-    // (a road can share a ref with an unrelated stretch elsewhere in the
-    // frame).
+    // that genuinely run near the route -- see _filterRoadWaysNearRoute()
+    // for why that second step still matters (the corridor search above
+    // already restricts *where* it looks, but a long way can still drift
+    // away from the route partway through). Highways that merely cross
+    // through the image's frame without the route running near them are
+    // no longer drawn -- see the note above _fetchRoadRefWaysNearRoute for
+    // why that trade-off is worth it.
     const roadWaysAllowed = allowedHighwayRefs.size
       ? roadWaysRaw.filter(w => allowedHighwayRefs.has(_extractHighwayCode(w.tags && w.tags.ref)))
       : [];
-    const roadWaysOnRoute = _filterRoadWaysNearRoute(roadWaysAllowed, routePts);
-
-    // Além do trajeto em si, toda rodovia FEDERAL (BR-xxx) OU ESTADUAL
-    // (sigla da UF, ex. AL-xxx, PB-xxx, PI-xxx) que aparecer no
-    // enquadramento da imagem também deve ser traçada/rotulada, mesmo que
-    // a rota não passe por ela -- desenhada com a geometria completa (sem
-    // o recorte "perto da rota" acima, já que o objetivo aqui é justamente
-    // mostrá-la fora da rota). Só entram vias (elementos OSM) que ainda
-    // não fazem parte de roadWaysAllowed, para não desenhar/rotular a
-    // mesma via duas vezes.
-    const onRouteWayIds = new Set(roadWaysAllowed.map(w => w.id));
-    const roadWaysOffRoute = roadWaysRaw
-      .filter(w => !onRouteWayIds.has(w.id) && _isFederalOrStateHighwayRef(w.tags && w.tags.ref))
-      .map(w => ({ tags: w.tags, segments: (w.geometry && w.geometry.length >= 2) ? [w.geometry] : [] }))
-      .filter(w => w.segments.length);
-
-    const roadWays = roadWaysOnRoute.concat(roadWaysOffRoute);
+    const roadWays = _filterRoadWaysNearRoute(roadWaysAllowed, routePts);
 
     const canvas = document.createElement('canvas');
     canvas.width = ROUTE_IMAGE_WIDTH;
@@ -2003,11 +2007,10 @@ window.exportRoutesImage = async function() {
     // returned nothing? found roads but none close enough to the route?),
     // instead of leaving that a mystery.
     console.log('[ROTA IMG] rodovias reconhecidas na rota:', [...allowedHighwayRefs]);
-    console.log('[ROTA IMG] vias do Overpass no enquadramento:', roadWaysRaw.length,
+    console.log('[ROTA IMG] vias do Overpass perto da rota:', roadWaysRaw.length,
       roadLookupFailed ? '(consulta falhou)' : '');
     console.log('[ROTA IMG] vias que batem com a rota (allowed):', roadWaysAllowed.length);
-    console.log('[ROTA IMG] vias desenhadas (perto da rota + fora dela na moldura):',
-      roadWaysOnRoute.length, '+', roadWaysOffRoute.length, '=', roadWays.length);
+    console.log('[ROTA IMG] vias desenhadas (após recorte perto da rota):', roadWays.length);
 
     LD_INICIO_POINTS.forEach(p => {
       const [px, py] = project(p.lat, p.lng);

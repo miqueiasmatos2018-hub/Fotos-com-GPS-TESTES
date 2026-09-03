@@ -1289,8 +1289,8 @@ function _mercatorXToLng(x) {
 // without the route ever running near it no longer gets drawn -- only
 // highways the route itself uses do, which is the part that actually
 // matters here.
-const OVERPASS_BBOX_TIMEOUT_MS = 20000; // a bit under Overpass's own [timeout:25]
-const ROUTE_IMAGE_CORRIDOR_SAMPLES = 14;    // how many points along the route get their own around: clause
+const OVERPASS_BBOX_TIMEOUT_MS = 26000; // a bit under Overpass's own [timeout:25] plus network slack
+const ROUTE_IMAGE_CORRIDOR_SAMPLES = 8;     // how many points along the route get their own around: clause -- kept low since a long route (100km+) already makes 8 separate "around" clauses a fairly heavy single query for the free Overpass mirrors
 const ROUTE_IMAGE_ROAD_RADIUS_M = 6000;     // 6km either side of each sample point
 const ROUTE_IMAGE_CITY_RADIUS_M = 15000;    // cities are sparser and often sit a bit off the highway itself
 
@@ -1350,16 +1350,41 @@ let _indeDnitTypeNamePromise = null;
 async function _resolveIndeDnitSnvTypeName() {
   if (_indeDnitTypeNamePromise) return _indeDnitTypeNamePromise;
   _indeDnitTypeNamePromise = (async () => {
-    const url = `${INDE_DNIT_WFS_URL}?service=WFS&version=2.0.0&request=GetCapabilities`;
-    const data = await _fetchTextResilient(url, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
-    if (!data) return null;
-    const doc = new DOMParser().parseFromString(data, 'text/xml');
-    if (doc.getElementsByTagName('parsererror').length) return null;
-    const names = Array.from(doc.getElementsByTagName('FeatureType'))
-      .map(ft => { const n = ft.getElementsByTagName('Name')[0]; return n ? n.textContent.trim() : ''; })
-      .filter(n => /SNV\d{6}/i.test(n));
-    names.sort(); // "DNIT:SNV202501A" > "DNIT:SNV202407A" -- lexical sort works since it's a YYYYMM prefix
-    return names.length ? names[names.length - 1] : null;
+    // WFS 1.0.0 first: universally supported, simpler XML, and some
+    // GeoServer instances reject/ignore version=2.0.0 GetCapabilities
+    // requests with an exception report instead of real capabilities --
+    // which looks like "the fetch worked but found nothing" from here,
+    // exactly what happened on the first attempt at this. Falls back to
+    // 2.0.0 if 1.0.0 somehow comes back empty too.
+    for (const version of ['1.0.0', '2.0.0']) {
+      const url = `${INDE_DNIT_WFS_URL}?service=WFS&version=${version}&request=GetCapabilities`;
+      const data = await _fetchTextResilient(url, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
+      if (!data) { console.warn(`[DNIT/INDE] GetCapabilities (${version}) sem resposta`); continue; }
+      const doc = new DOMParser().parseFromString(data, 'text/xml');
+      if (doc.getElementsByTagName('parsererror').length) {
+        console.warn(`[DNIT/INDE] GetCapabilities (${version}) veio com XML inválido. Primeiros 300 caracteres:`, data.slice(0, 300));
+        continue;
+      }
+      const allNames = Array.from(doc.getElementsByTagName('FeatureType'))
+        .map(ft => { const n = ft.getElementsByTagName('Name')[0]; return n ? n.textContent.trim() : ''; })
+        .filter(Boolean);
+      // Prefer a name that looks like a dated SNV federal layer
+      // ("SNV202501A" or similar); if the naming convention turns out to
+      // be different than expected, fall back to anything that at least
+      // mentions SNV or "rodovia", so this doesn't come up completely
+      // empty on a naming mismatch alone.
+      let names = allNames.filter(n => /SNV\d{6}/i.test(n));
+      if (!names.length) names = allNames.filter(n => /snv|rodovia/i.test(n));
+      if (!names.length) {
+        console.warn(`[DNIT/INDE] GetCapabilities (${version}) não tem nenhuma camada com "SNV"/"rodovia" no nome. Camadas encontradas:`, allNames);
+        continue;
+      }
+      names.sort(); // "DNIT:SNV202501A" > "DNIT:SNV202407A" -- lexical sort works since it's a YYYYMM prefix
+      const chosen = names[names.length - 1];
+      console.log(`[DNIT/INDE] usando a camada "${chosen}" (WFS ${version}) de`, allNames.length, 'camadas disponíveis');
+      return chosen;
+    }
+    return null;
   })();
   return _indeDnitTypeNamePromise;
 }

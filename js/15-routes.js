@@ -1398,6 +1398,36 @@ async function _resolveIndeDnitSnvTypeName() {
   return _indeDnitTypeNamePromise;
 }
 
+// ── DNIT's OWN GeoServer (the one behind https://servicos.dnit.gov.br/vgeo/),
+// separate from the INDE one above -- confirmed to exist via a workspace
+// called "vgeo" (e.g. "vgeo:vw_cide_rod"), but the full layer list and
+// field schema aren't known yet. This is diagnostic-only for now: it logs
+// every layer name it finds so the actual state-highway layer (if there
+// is one) can be identified and wired up properly in a follow-up, instead
+// of guessing a typeName/field schema with no way to verify it here.
+const DNIT_OWN_GEOSERVER_URL = 'https://servicos.dnit.gov.br/dnitgeo/geoserver/ows';
+
+async function _probeDnitOwnGeoserver() {
+  for (const version of ['1.0.0', '2.0.0']) {
+    const url = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetCapabilities`;
+    const data = await _fetchTextResilient(url, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
+    if (!data) { console.warn(`[DNIT/VGEO] GetCapabilities (${version}) sem resposta`); continue; }
+    const doc = new DOMParser().parseFromString(data, 'text/xml');
+    if (doc.getElementsByTagName('parsererror').length) {
+      console.warn(`[DNIT/VGEO] GetCapabilities (${version}) veio com XML inválido. Primeiros 300 caracteres:`, data.slice(0, 300));
+      continue;
+    }
+    const allNames = Array.from(doc.getElementsByTagName('FeatureType'))
+      .map(ft => { const n = ft.getElementsByTagName('Name')[0]; return n ? n.textContent.trim() : ''; })
+      .filter(Boolean);
+    if (!allNames.length) { console.warn(`[DNIT/VGEO] GetCapabilities (${version}) não retornou nenhuma camada`); continue; }
+    console.log(`[DNIT/VGEO] ${allNames.length} camadas disponíveis (WFS ${version}): ${allNames.join(' | ')}`);
+    const candidates = allNames.filter(n => /rod|snv|estadual|federal|via/i.test(n));
+    console.log(`[DNIT/VGEO] candidatas a rodovia:`, candidates.length ? candidates.join(' | ') : '(nenhuma com esse filtro -- veja a lista completa acima)');
+    return; // found and logged -- no need to try the other version too
+  }
+}
+
 // One BBOX GetFeature request, trying both possible axis orders for the
 // bbox param (EPSG:4326 is notorious for WFS servers disagreeing on
 // lng,lat vs lat,lng) -- whichever comes back with features wins; this is
@@ -2058,6 +2088,12 @@ window.exportRoutesImage = async function() {
   showToast('🛰️ Buscando imagem de satélite…');
 
   try {
+    // Diagnostic-only, fire-and-forget: doesn't affect the image, just
+    // logs what's on DNIT's own GeoServer (see _probeDnitOwnGeoserver)
+    // so the real state-highway layer -- if there is one there -- can be
+    // identified from the console next time this runs.
+    _probeDnitOwnGeoserver().catch(err => console.warn('[DNIT/VGEO] probe falhou:', err));
+
     const routePts = [];
     ready.forEach(([, r]) => {
       const coords = (r.roadCoords && r.roadCoords.length >= 2) ? r.roadCoords : r.waypoints;

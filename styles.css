@@ -1710,8 +1710,13 @@
   .meta-bulk-fields {
     display: none;
     padding: 8px 0 12px;
+    max-height: 42vh;
+    overflow-y: auto;
   }
   .meta-bulk-fields.open { display: block; }
+  .meta-bulk-fields::-webkit-scrollbar { width: 3px; }
+  .meta-bulk-fields::-webkit-scrollbar-track { background: transparent; }
+  .meta-bulk-fields::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
   .meta-bulk-field-row {
     display: flex;

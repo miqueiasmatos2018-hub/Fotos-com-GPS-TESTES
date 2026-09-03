@@ -86,6 +86,31 @@ async function _fetchJsonResilient(url, { timeoutMs = OSRM_TIMEOUT_MS, retries =
   return null;
 }
 
+// Same as above but for plain text (XML capabilities documents, mainly) --
+// duplicated rather than sharing a body-parser param so callers doing
+// .json() get real errors on malformed JSON instead of it silently
+// succeeding as text.
+async function _fetchTextResilient(url, { timeoutMs = OSRM_TIMEOUT_MS, retries = 1 } = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt === retries) {
+        console.error('Fetch falhou (desistindo após retry):', url, err);
+        return null;
+      }
+      await _sleep(OSRM_RETRY_BACKOFF_MS);
+    }
+  }
+  return null;
+}
+
 // Raw OSRM fetch (bypassing the Leaflet Routing Machine control) purely to
 // check which roads a set of waypoints would actually use.
 async function _fetchOsrmHighwayFraction(points) {
@@ -1297,6 +1322,111 @@ async function _fetchRoadRefWaysNearRoute(routePts) {
   throw new Error('Todos os espelhos do Overpass falharam');
 }
 
+// ── DNIT/INDE (Sistema Nacional de Viação) as a second, more authoritative
+// road source ────────────────────────────────────────────────────────────
+// The federal government's own spatial-data hub (INDE, run by IBGE)
+// republishes DNIT's official SNV federal-highway mesh as a public WFS --
+// unlike OSM, this is the actual source DNIT itself maintains for "which
+// BR runs where", and it's on federal government infrastructure that's
+// more likely to already be reachable on a network where OSM's Overpass
+// mirrors are blocked. Merged in alongside (not replacing) the Overpass
+// fetch above: this layer only covers FEDERAL (BR-xxx) highways, so state
+// (UF-xxx) roads still rely on Overpass.
+//
+// NOTE: this couldn't be tested against the live service from here, only
+// verified against its public documentation/capabilities -- if it doesn't
+// come through, the road/city diagnostic already wired into the export
+// (console.log + the final toast) will show exactly why, same as the
+// Overpass troubleshooting earlier.
+const INDE_DNIT_WFS_URL = 'https://geoservicos.inde.gov.br/geoserver/DNIT/ows';
+const INDE_DNIT_TIMEOUT_MS = 20000;
+let _indeDnitTypeNamePromise = null;
+
+// The SNV federal layer's name is versioned by publication date (e.g.
+// "DNIT:SNV202407A") and gets superseded periodically -- instead of
+// hardcoding a version that will eventually go stale, this reads the
+// WFS's own GetCapabilities once and picks the newest-looking SNV layer
+// it currently advertises. Cached for the rest of the session once found.
+async function _resolveIndeDnitSnvTypeName() {
+  if (_indeDnitTypeNamePromise) return _indeDnitTypeNamePromise;
+  _indeDnitTypeNamePromise = (async () => {
+    const url = `${INDE_DNIT_WFS_URL}?service=WFS&version=2.0.0&request=GetCapabilities`;
+    const data = await _fetchTextResilient(url, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
+    if (!data) return null;
+    const doc = new DOMParser().parseFromString(data, 'text/xml');
+    if (doc.getElementsByTagName('parsererror').length) return null;
+    const names = Array.from(doc.getElementsByTagName('FeatureType'))
+      .map(ft => { const n = ft.getElementsByTagName('Name')[0]; return n ? n.textContent.trim() : ''; })
+      .filter(n => /SNV\d{6}/i.test(n));
+    names.sort(); // "DNIT:SNV202501A" > "DNIT:SNV202407A" -- lexical sort works since it's a YYYYMM prefix
+    return names.length ? names[names.length - 1] : null;
+  })();
+  return _indeDnitTypeNamePromise;
+}
+
+// One BBOX GetFeature request, trying both possible axis orders for the
+// bbox param (EPSG:4326 is notorious for WFS servers disagreeing on
+// lng,lat vs lat,lng) -- whichever comes back with features wins; this is
+// figured out once via _dnitAxisOrder and reused for the rest of the
+// samples so it isn't re-guessed on every single request.
+let _dnitAxisOrder = null; // 'lnglat' | 'latlng', decided by the first successful request
+
+async function _fetchDnitSnvBBox(typeName, west, south, east, north) {
+  const orders = _dnitAxisOrder
+    ? [_dnitAxisOrder]
+    : ['lnglat', 'latlng'];
+  for (const order of orders) {
+    const bbox = order === 'lnglat' ? `${west},${south},${east},${north}` : `${south},${west},${north},${east}`;
+    const url = `${INDE_DNIT_WFS_URL}?service=WFS&version=2.0.0&request=GetFeature&typeNames=${encodeURIComponent(typeName)}&outputFormat=application/json&srsName=EPSG:4326&bbox=${bbox},EPSG:4326`;
+    const data = await _fetchJsonResilient(url, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
+    if (data && Array.isArray(data.features) && data.features.length) {
+      if (!_dnitAxisOrder) _dnitAxisOrder = order;
+      return data.features;
+    }
+  }
+  return [];
+}
+
+// A single GeoJSON feature can be a MultiLineString covering several
+// disconnected pieces of road -- kept as separate {tags, geometry} entries
+// (matching the Overpass "way" shape _filterRoadWaysNearRoute expects)
+// instead of flattened into one array, which would draw a spurious line
+// bridging two unrelated segments.
+function _dnitFeatureToWays(feature) {
+  const props = feature.properties || {};
+  const br = String(props.vl_br || props.VL_BR || '').trim();
+  if (!br) return [];
+  const ref = `BR-${br}`;
+  const geom = feature.geometry;
+  const lines = !geom ? [] : geom.type === 'MultiLineString' ? geom.coordinates
+    : geom.type === 'LineString' ? [geom.coordinates] : [];
+  return lines
+    .filter(line => line.length >= 2)
+    .map(line => ({ tags: { ref }, geometry: line.map(c => ({ lat: c[1], lon: c[0] })) }));
+}
+
+async function _fetchDnitSnvRoadsNearRoute(routePts) {
+  const typeName = await _resolveIndeDnitSnvTypeName();
+  if (!typeName) throw new Error('Camada SNV não encontrada no WFS do DNIT/INDE (GetCapabilities não retornou a camada esperada)');
+
+  // Same corridor idea as the Overpass query: a small box around each
+  // sampled route point instead of one request for the whole route's
+  // extent -- WFS doesn't have Overpass's "around a point" union syntax,
+  // so this issues one request per sample and merges the results.
+  const samples = _sampleRoutePoints(routePts, ROUTE_IMAGE_CORRIDOR_SAMPLES);
+  const radiusDeg = ROUTE_IMAGE_ROAD_RADIUS_M / 111000; // rough metres->degrees; fine for a small search box
+  const byFeatureId = new Map();
+
+  await Promise.all(samples.map(async p => {
+    const features = await _fetchDnitSnvBBox(typeName, p.lng - radiusDeg, p.lat - radiusDeg, p.lng + radiusDeg, p.lat + radiusDeg);
+    features.forEach(f => byFeatureId.set(f.id || JSON.stringify(f.geometry), f));
+  }));
+
+  const ways = [];
+  byFeatureId.forEach(f => ways.push(..._dnitFeatureToWays(f)));
+  return ways;
+}
+
 const ROUTE_IMAGE_CITY_MAX_LABELS = 8;         // caps how many city labels a wide frame can end up with
 
 // Fetches settlements (city/town only -- see _pickCitiesForImage for why
@@ -1948,8 +2078,8 @@ window.exportRoutesImage = async function() {
     // the image still generates with just the satellite + our own routes,
     // and a toast at the end tells the person which labels are missing
     // (instead of the image just quietly coming out without them).
-    let roadLookupFailed = false, cityLookupFailed = false;
-    const [baseImg, transportationImg, placesImg, roadWaysRaw, citiesRaw] = await Promise.all([
+    let roadLookupFailed = false, cityLookupFailed = false, dnitLookupFailed = false;
+    const [baseImg, transportationImg, placesImg, roadWaysOverpass, dnitWaysRaw, citiesRaw] = await Promise.all([
       _fetchEsriMapImage(ESRI_WORLD_IMAGERY_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png24' }),
       _fetchEsriMapImage(ESRI_TRANSPORTATION_EXPORT_URL, bbox, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT, { format: 'png32', transparent: true, dpi: 300 }).catch(err => {
         console.warn('Esri World_Transportation overlay indisponível:', err);
@@ -1959,9 +2089,19 @@ window.exportRoutesImage = async function() {
         console.warn('Esri World_Boundaries_and_Places overlay indisponível:', err);
         return null;
       }),
+      // Best-effort on top of the DNIT/INDE source below -- Overpass also
+      // covers state (UF-xxx) highways the DNIT federal layer doesn't, so
+      // it stays in the mix even when DNIT works.
       _fetchRoadRefWaysNearRoute(routePts).catch(err => {
-        console.warn('Overpass road/ref lookup indisponível, seguindo só com satélite + rotas:', err);
-        roadLookupFailed = true;
+        console.warn('Overpass road/ref lookup indisponível:', err);
+        return [];
+      }),
+      // DNIT's own SNV federal-highway mesh (via INDE) -- see the note
+      // above _fetchDnitSnvRoadsNearRoute. Only covers BR-xxx, so it
+      // doesn't replace the Overpass fetch above, just supplements it.
+      _fetchDnitSnvRoadsNearRoute(routePts).catch(err => {
+        console.warn('DNIT/INDE (SNV) lookup indisponível:', err);
+        dnitLookupFailed = true;
         return [];
       }),
       // Best-effort on top of the local IBGE dataset below -- not the
@@ -1985,15 +2125,17 @@ window.exportRoutesImage = async function() {
       citiesLocal.map(_normalizeCityEntry).concat(citiesRaw.map(_normalizeCityEntry)).filter(Boolean)
     );
     if (!citiesForImage.length) cityLookupFailed = true;
-    // Keep only the roads actually part of the alternative route's
-    // trajeto, then (as a safety net) only the portions of those roads
-    // that genuinely run near the route -- see _filterRoadWaysNearRoute()
-    // for why that second step still matters (the corridor search above
+    // Roads: DNIT/INDE (federal BR-xxx, authoritative) and Overpass
+    // (federal + state, best-effort) merged together, then narrowed the
+    // same way regardless of source -- see _filterRoadWaysNearRoute() for
+    // why that second step still matters (the corridor search above
     // already restricts *where* it looks, but a long way can still drift
     // away from the route partway through). Highways that merely cross
     // through the image's frame without the route running near them are
-    // no longer drawn -- see the note above _fetchRoadRefWaysNearRoute for
-    // why that trade-off is worth it.
+    // not drawn -- see the note above _fetchRoadRefWaysNearRoute for why
+    // that trade-off is worth it.
+    const roadWaysRaw = dnitWaysRaw.concat(roadWaysOverpass);
+    roadLookupFailed = !roadWaysRaw.length;
     const roadWaysAllowed = allowedHighwayRefs.size
       ? roadWaysRaw.filter(w => allowedHighwayRefs.has(_extractHighwayCode(w.tags && w.tags.ref)))
       : [];
@@ -2058,8 +2200,9 @@ window.exportRoutesImage = async function() {
     // returned nothing? found roads but none close enough to the route?),
     // instead of leaving that a mystery.
     console.log('[ROTA IMG] rodovias reconhecidas na rota:', [...allowedHighwayRefs]);
-    console.log('[ROTA IMG] vias do Overpass perto da rota:', roadWaysRaw.length,
-      roadLookupFailed ? '(consulta falhou)' : '');
+    console.log('[ROTA IMG] vias do DNIT/INDE perto da rota:', dnitWaysRaw.length,
+      dnitLookupFailed ? '(consulta falhou)' : '');
+    console.log('[ROTA IMG] vias do Overpass perto da rota:', roadWaysOverpass.length);
     console.log('[ROTA IMG] vias que batem com a rota (allowed):', roadWaysAllowed.length);
     console.log('[ROTA IMG] vias desenhadas (após recorte perto da rota):', roadWays.length);
     console.log('[ROTA IMG] municípios (lista local IBGE):', citiesLocal.length,
@@ -2092,14 +2235,13 @@ window.exportRoutesImage = async function() {
       triggerDownload(blob, fileName);
       // Named explicitly instead of just going quiet: a road/city lookup
       // that failed used to leave the image silently without those labels
-      // with no indication why -- this at least tells the person it's a
-      // lookup problem (probably the Overpass service), not something
-      // wrong with their routes.
+      // with no indication why -- this at least tells the person which
+      // source came up empty, not just that something's missing.
       const warnings = [];
-      if (roadLookupFailed) warnings.push('sem rótulos de via (consulta ao OpenStreetMap falhou)');
+      if (roadLookupFailed) warnings.push('sem rótulos de via (DNIT e OpenStreetMap indisponíveis)');
       else if (!allowedHighwayRefs.size) warnings.push('nenhuma rodovia identificada no trajeto -- imagem sem rótulos de via');
-      else if (!roadWays.length) warnings.push(`${roadWaysRaw.length} vias encontradas no OSM, nenhuma perto da rota`);
-      else warnings.push(`${roadWays.length} vias marcadas`);
+      else if (!roadWays.length) warnings.push(`${roadWaysRaw.length} vias encontradas (DNIT+OSM), nenhuma perto da rota`);
+      else warnings.push(`${roadWays.length} vias marcadas (${dnitWaysRaw.length} do DNIT)`);
       if (cityLookupFailed) warnings.push('nenhum município encontrado perto da rota');
       else warnings.push(`${citiesForImage.length} cidades marcadas`);
       const warning = warnings.length ? ` (${warnings.join('; ')})` : '';

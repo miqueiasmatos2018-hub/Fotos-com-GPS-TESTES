@@ -1289,7 +1289,16 @@ function _mercatorXToLng(x) {
 // without the route ever running near it no longer gets drawn -- only
 // highways the route itself uses do, which is the part that actually
 // matters here.
-const OVERPASS_BBOX_TIMEOUT_MS = 26000; // a bit under Overpass's own [timeout:25] plus network slack
+// The DNIT/INDE WFS is now the primary, reliable source for federal
+// highway refs (see below), and the local IBGE list is the primary
+// source for cities -- Overpass is only a nice-to-have supplement now
+// (state highways DNIT's federal layer doesn't cover, and any settlement
+// that isn't its own município). It doesn't need a generous allowance
+// anymore, and giving it one just means waiting ~20s+ per mirror for a
+// server this network can't even reach (overpass-api.de is blocked at
+// the firewall here -- see /areas/fotos-com-gps.md) before the export can
+// finish with what DNIT/local already provided.
+const OVERPASS_BBOX_TIMEOUT_MS = 7000;
 const ROUTE_IMAGE_CORRIDOR_SAMPLES = 8;     // how many points along the route get their own around: clause -- kept low since a long route (100km+) already makes 8 separate "around" clauses a fairly heavy single query for the free Overpass mirrors
 const ROUTE_IMAGE_ROAD_RADIUS_M = 6000;     // 6km either side of each sample point
 const ROUTE_IMAGE_CITY_RADIUS_M = 15000;    // cities are sparser and often sit a bit off the highway itself

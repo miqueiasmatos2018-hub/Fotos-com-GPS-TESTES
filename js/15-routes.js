@@ -1316,43 +1316,41 @@ async function _fetchCitiesNearRoute(routePts) {
   throw new Error('Todos os espelhos do Overpass falharam');
 }
 
-// Narrows the raw Overpass hits down to what's actually worth labeling on
-// the image: named places only, duplicates collapsed (OSM sometimes has
-// more than one node for the same settlement), and capped at
-// ROUTE_IMAGE_CITY_MAX_LABELS so a wide/rural frame doesn't end up wall to
-// wall with labels. Villages/povoados are excluded entirely -- only
-// city/town come back from _fetchCitiesInBBox above in the first place, so
-// this only has city vs. town left to rank. Reuses
-// _cityPopulation/CIDADE_NAME_EXCLUDE_RE from 16-medidas.js (loaded before
-// this runs, even though that file loads after this one -- both are
-// classic scripts sharing one global scope, and this only executes later
-// from a button click).
-function _pickCitiesForImage(raw) {
-  const named = raw.filter(c =>
-    c.tags && c.tags.name && c.lat != null && c.lon != null &&
-    !(typeof CIDADE_NAME_EXCLUDE_RE !== 'undefined' && CIDADE_NAME_EXCLUDE_RE.test(c.tags.name))
-  );
+// Narrows the combined city hits down to what's actually worth labeling on
+// the image: named places only, duplicates collapsed (the local IBGE list
+// and Overpass can both return the same city), capitals ranked first,
+// capped at ROUTE_IMAGE_CITY_MAX_LABELS so a wide/rural frame doesn't end
+// up wall to wall with labels. Expects already-normalized entries --
+// {name, lat, lon, isCapital} -- from _normalizeCityEntry below, not raw
+// Overpass/IBGE shapes directly.
+function _pickCitiesForImage(entries) {
+  const named = entries.filter(c => c.name && c.lat != null && c.lon != null);
 
   const deduped = [];
   named.forEach(c => {
-    const pop = (typeof _cityPopulation === 'function' ? _cityPopulation(c) : null) || 0;
-    const dup = deduped.find(d =>
-      d.tags.name === c.tags.name || _haversineKm(d.lat, d.lon, c.lat, c.lon) < 2
-    );
+    const dup = deduped.find(d => d.name === c.name || _haversineKm(d.lat, d.lon, c.lat, c.lon) < 2);
     if (!dup) { deduped.push(c); return; }
-    const dupPop = (typeof _cityPopulation === 'function' ? _cityPopulation(dup) : null) || 0;
-    if (pop > dupPop) Object.assign(dup, c);
+    if (c.isCapital && !dup.isCapital) Object.assign(dup, c);
   });
 
-  const placeScore = place => (place === 'city' ? 2 : place === 'town' ? 1 : 0);
-  deduped.sort((a, b) => {
-    const scoreDiff = placeScore(b.tags.place) - placeScore(a.tags.place);
-    if (scoreDiff) return scoreDiff;
-    const popA = (typeof _cityPopulation === 'function' ? _cityPopulation(a) : null) || 0;
-    const popB = (typeof _cityPopulation === 'function' ? _cityPopulation(b) : null) || 0;
-    return popB - popA;
-  });
+  deduped.sort((a, b) => (b.isCapital ? 1 : 0) - (a.isCapital ? 1 : 0));
   return deduped.slice(0, ROUTE_IMAGE_CITY_MAX_LABELS);
+}
+
+// Common shape for both city sources: the local IBGE dataset (always
+// available, see 21-municipios-br.js) and, best-effort, Overpass (only
+// when reachable -- see _fetchCitiesNearRoute above). The IBGE list is
+// the reliable one and doesn't depend on any network request at all;
+// Overpass is merged in on top mainly in case it has a settlement IBGE's
+// official municipality list wouldn't (a named locality that isn't its
+// own município), not because it's more trustworthy.
+function _normalizeCityEntry(c) {
+  if (c.tags) { // raw Overpass node
+    if (!c.tags.name) return null;
+    if (typeof CIDADE_NAME_EXCLUDE_RE !== 'undefined' && CIDADE_NAME_EXCLUDE_RE.test(c.tags.name)) return null;
+    return { name: c.tags.name, lat: c.lat, lon: c.lon, isCapital: false, uf: null };
+  }
+  return { name: c.name, lat: c.lat, lon: c.lng, isCapital: !!c.isCapital, uf: c.uf || null }; // from _municipiosBrNear
 }
 
 
@@ -1966,13 +1964,27 @@ window.exportRoutesImage = async function() {
         roadLookupFailed = true;
         return [];
       }),
+      // Best-effort on top of the local IBGE dataset below -- not the
+      // primary source anymore, so its failure doesn't set
+      // cityLookupFailed (there's always at least the local list).
       _fetchCitiesNearRoute(routePts).catch(err => {
-        console.warn('Overpass city lookup indisponível, imagem sairá sem rótulos de cidade:', err);
-        cityLookupFailed = true;
+        console.warn('Overpass city lookup indisponível, seguindo só com a lista local de municípios:', err);
         return [];
       })
     ]);
-    const citiesForImage = _pickCitiesForImage(citiesRaw);
+    // Cities: the local IBGE municipality list (see 21-municipios-br.js)
+    // never depends on a network request, so it's the reliable baseline;
+    // Overpass is merged on top when it's reachable, mainly for named
+    // localities that aren't their own município. If neither the local
+    // lookup nor the merge produces anything, THAT'S the one real "city
+    // lookup failed" case worth telling the person about.
+    const citiesLocal = (typeof _municipiosBrNear === 'function')
+      ? _municipiosBrNear(_sampleRoutePoints(routePts, ROUTE_IMAGE_CORRIDOR_SAMPLES), ROUTE_IMAGE_CITY_RADIUS_M / 1000)
+      : [];
+    const citiesForImage = _pickCitiesForImage(
+      citiesLocal.map(_normalizeCityEntry).concat(citiesRaw.map(_normalizeCityEntry)).filter(Boolean)
+    );
+    if (!citiesForImage.length) cityLookupFailed = true;
     // Keep only the roads actually part of the alternative route's
     // trajeto, then (as a safety net) only the portions of those roads
     // that genuinely run near the route -- see _filterRoadWaysNearRoute()
@@ -2050,6 +2062,8 @@ window.exportRoutesImage = async function() {
       roadLookupFailed ? '(consulta falhou)' : '');
     console.log('[ROTA IMG] vias que batem com a rota (allowed):', roadWaysAllowed.length);
     console.log('[ROTA IMG] vias desenhadas (após recorte perto da rota):', roadWays.length);
+    console.log('[ROTA IMG] municípios (lista local IBGE):', citiesLocal.length,
+      '+ Overpass:', citiesRaw.length, '=', citiesForImage.length, 'no rótulo final');
 
     LD_INICIO_POINTS.forEach(p => {
       const [px, py] = project(p.lat, p.lng);
@@ -2061,7 +2075,7 @@ window.exportRoutesImage = async function() {
 
     citiesForImage.forEach(c => {
       const [px, py] = project(c.lat, c.lon);
-      _drawCityMarker(ctx, px, py, c.tags.name);
+      _drawCityMarker(ctx, px, py, c.uf ? `${c.name} - ${c.uf}` : c.name);
     });
 
     const code = (ROUTES.a.nameMiddle || ROUTES.b.nameMiddle || '').trim();
@@ -2086,7 +2100,7 @@ window.exportRoutesImage = async function() {
       else if (!allowedHighwayRefs.size) warnings.push('nenhuma rodovia identificada no trajeto -- imagem sem rótulos de via');
       else if (!roadWays.length) warnings.push(`${roadWaysRaw.length} vias encontradas no OSM, nenhuma perto da rota`);
       else warnings.push(`${roadWays.length} vias marcadas`);
-      if (cityLookupFailed) warnings.push('sem rótulos de cidade (consulta ao OpenStreetMap falhou)');
+      if (cityLookupFailed) warnings.push('nenhum município encontrado perto da rota');
       else warnings.push(`${citiesForImage.length} cidades marcadas`);
       const warning = warnings.length ? ` (${warnings.join('; ')})` : '';
       showToast(`⬇ Imagem <span class="accent">${fileName}</span> gerada${warning}`);

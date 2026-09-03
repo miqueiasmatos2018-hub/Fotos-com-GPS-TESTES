@@ -1390,7 +1390,7 @@ async function _resolveIndeDnitSnvTypeName() {
       }
       names.sort(); // "DNIT:SNV202501A" > "DNIT:SNV202407A" -- lexical sort works since it's a YYYYMM prefix
       const chosen = names[names.length - 1];
-      console.log(`[DNIT/INDE] usando a camada "${chosen}" (WFS ${version}) de`, allNames.length, 'camadas disponíveis:', allNames);
+      console.log(`[DNIT/INDE] usando a camada "${chosen}" (WFS ${version}) de ${allNames.length} camadas disponíveis: ${allNames.join(' | ')}`);
       return chosen;
     }
     return null;

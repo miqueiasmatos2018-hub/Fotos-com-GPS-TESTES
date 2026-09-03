@@ -1426,6 +1426,31 @@ function _computeMercatorBBoxForImage(points) {
   return { xmin, ymin, xmax, ymax };
 }
 
+// Same aspect-ratio-fitting step as above, but starting from the live
+// map's current bounds (post fitBounds) instead of computing padding from
+// the raw route points independently -- see the call site in
+// exportRoutesImage for why.
+function _computeMercatorBBoxFromBounds(bounds) {
+  const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
+  const m1 = _lngLatToMercatorXY(sw.lng, sw.lat);
+  const m2 = _lngLatToMercatorXY(ne.lng, ne.lat);
+  let xmin = Math.min(m1.x, m2.x), xmax = Math.max(m1.x, m2.x);
+  let ymin = Math.min(m1.y, m2.y), ymax = Math.max(m1.y, m2.y);
+
+  const targetRatio = ROUTE_IMAGE_WIDTH / ROUTE_IMAGE_HEIGHT;
+  const curRatio = (xmax - xmin) / (ymax - ymin);
+  if (curRatio > targetRatio) {
+    const newH = (xmax - xmin) / targetRatio;
+    const cy = (ymin + ymax) / 2;
+    ymin = cy - newH / 2; ymax = cy + newH / 2;
+  } else {
+    const newW = (ymax - ymin) * targetRatio;
+    const cx = (xmin + xmax) / 2;
+    xmin = cx - newW / 2; xmax = cx + newW / 2;
+  }
+  return { xmin, ymin, xmax, ymax };
+}
+
 async function _fetchEsriMapImage(serviceUrl, bbox, width, height, extraParams) {
   const params = new URLSearchParams(Object.assign({
     bbox: `${bbox.xmin},${bbox.ymin},${bbox.xmax},${bbox.ymax}`,
@@ -1842,7 +1867,21 @@ window.exportRoutesImage = async function() {
     const allPoints = routePts.slice();
     LD_INICIO_POINTS.forEach(p => allPoints.push(p));
 
-    const bbox = _computeMercatorBBoxForImage(allPoints);
+    // Center the live map on the routes first -- same fitBounds a person
+    // would do by hand -- then use exactly that resulting view as the
+    // image's frame, instead of an independently-computed crop. This is
+    // as close as this can get to "print what's centered on screen":
+    // the actual pixels still come from Esri's export service below (see
+    // why in the comment on ESRI_WORLD_IMAGERY_EXPORT_URL below), because
+    // a literal screenshot of the live Leaflet map can't be saved to a
+    // file at all when the base layer is Google's satellite/hybrid tiles
+    // -- Google's tile servers don't allow cross-origin canvas reads, so
+    // the browser refuses to export a canvas that ever drew one of those
+    // tiles (a "tainted canvas" security restriction, not a bug in this
+    // app). Esri's export endpoint is the CORS-friendly stand-in for that
+    // same imagery.
+    map.fitBounds(L.latLngBounds(allPoints.map(p => [p.lat, p.lng])), { padding: [60, 60], animate: false });
+    const bbox = _computeMercatorBBoxFromBounds(map.getBounds());
 
     // Whitelist de códigos de rodovia: exatamente as que alguma das rotas
     // construídas realmente percorre. Calculado na hora (mesma conta do
@@ -1930,10 +1969,6 @@ window.exportRoutesImage = async function() {
       ];
     };
 
-    // Other roads' tracing (thin, pale) drawn before our own route lines,
-    // so our routes still stand out on top of the general road network.
-    _drawRoadRefLines(ctx, roadWays, project);
-
     // Original (green) drawn first, alternative (red) on top -- matches
     // the layering in the reference export.
     ['b', 'a'].forEach(key => {
@@ -1955,9 +1990,11 @@ window.exportRoutesImage = async function() {
       ctx.shadowBlur = 0;
     });
 
-    // Road shield labels (BR-xxx, RR-xxx...) drawn AFTER the route lines,
-    // fixed pixel size, so they stay legible even where a route runs right
-    // along that road -- matching the reference export's layering.
+    // Other roads' tracing + shield labels (BR-xxx, RR-xxx...) drawn AFTER
+    // the route lines now, on top -- so the highway indicator is never
+    // hidden by the route stroke, even where the route runs right along
+    // that same road.
+    _drawRoadRefLines(ctx, roadWays, project);
     _drawRoadRefShieldLabels(ctx, roadWays, project);
 
     LD_INICIO_POINTS.forEach(p => {

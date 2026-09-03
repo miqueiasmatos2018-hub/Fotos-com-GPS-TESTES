@@ -1435,13 +1435,13 @@ async function _probeDnitOwnGeoserver(samplePoint) {
       const bboxUrl = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetFeature&typeName=vgeo:vw_snv_rod&outputFormat=application/json&maxFeatures=3&bbox=${samplePoint.lng - d},${samplePoint.lat - d},${samplePoint.lng + d},${samplePoint.lat + d}`;
       const sample = await _fetchJsonResilient(bboxUrl, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
       if (sample && Array.isArray(sample.features) && sample.features.length) {
-        console.log('[DNIT/VGEO] vw_snv_rod -- campos de uma feição de exemplo:', sample.features[0].properties);
+        console.log('[DNIT/VGEO] vw_snv_rod -- campos de uma feição de exemplo: ' + JSON.stringify(sample.features[0].properties));
       } else if (sample) {
-        console.warn('[DNIT/VGEO] vw_snv_rod respondeu mas sem feições nesse bbox de teste (~5km ao redor de', samplePoint, ') -- tentando eixo invertido');
+        console.warn(`[DNIT/VGEO] vw_snv_rod respondeu mas sem feições nesse bbox de teste (~5km ao redor de lat=${samplePoint.lat}, lng=${samplePoint.lng}) -- tentando eixo invertido`);
         const bboxUrlSwapped = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetFeature&typeName=vgeo:vw_snv_rod&outputFormat=application/json&maxFeatures=3&bbox=${samplePoint.lat - d},${samplePoint.lng - d},${samplePoint.lat + d},${samplePoint.lng + d}`;
         const sample2 = await _fetchJsonResilient(bboxUrlSwapped, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
         if (sample2 && Array.isArray(sample2.features) && sample2.features.length) {
-          console.log('[DNIT/VGEO] vw_snv_rod (eixo invertido) -- campos de uma feição de exemplo:', sample2.features[0].properties);
+          console.log('[DNIT/VGEO] vw_snv_rod (eixo invertido) -- campos de uma feição de exemplo: ' + JSON.stringify(sample2.features[0].properties));
         } else {
           console.warn('[DNIT/VGEO] vw_snv_rod: nenhuma feição em nenhuma ordem de eixo testada nesse bbox');
         }

@@ -1407,7 +1407,7 @@ async function _resolveIndeDnitSnvTypeName() {
 // of guessing a typeName/field schema with no way to verify it here.
 const DNIT_OWN_GEOSERVER_URL = 'https://servicos.dnit.gov.br/dnitgeo/geoserver/ows';
 
-async function _probeDnitOwnGeoserver(samplePoint) {
+async function _probeDnitOwnGeoserver(samplePoints) {
   for (const version of ['1.0.0', '2.0.0']) {
     const url = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetCapabilities`;
     const data = await _fetchTextResilient(url, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
@@ -1425,28 +1425,42 @@ async function _probeDnitOwnGeoserver(samplePoint) {
     const candidates = allNames.filter(n => /rod|snv|estadual|federal|via/i.test(n));
     console.log(`[DNIT/VGEO] candidatas a rodovia:`, candidates.length ? candidates.join(' | ') : '(nenhuma com esse filtro -- veja a lista completa acima)');
 
-    // vw_snv_rod looks like it could be the combined federal+state SNV
-    // view (unlike vw_cide_rod_*, which is scoped to the CIDE program
-    // specifically) -- pull one small sample around a real point from
-    // this trip to see its actual field names before writing any real
-    // extraction logic against a guessed schema.
-    if (samplePoint && allNames.includes('vgeo:vw_snv_rod')) {
-      const d = 0.05; // ~5km box, just enough to likely catch something
-      const bboxUrl = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetFeature&typeName=vgeo:vw_snv_rod&outputFormat=application/json&maxFeatures=3&bbox=${samplePoint.lng - d},${samplePoint.lat - d},${samplePoint.lng + d},${samplePoint.lat + d}`;
-      const sample = await _fetchJsonResilient(bboxUrl, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
-      if (sample && Array.isArray(sample.features) && sample.features.length) {
-        console.log('[DNIT/VGEO] vw_snv_rod -- campos de uma feição de exemplo: ' + JSON.stringify(sample.features[0].properties));
-      } else if (sample) {
-        console.warn(`[DNIT/VGEO] vw_snv_rod respondeu mas sem feições nesse bbox de teste (~5km ao redor de lat=${samplePoint.lat}, lng=${samplePoint.lng}) -- tentando eixo invertido`);
-        const bboxUrlSwapped = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetFeature&typeName=vgeo:vw_snv_rod&outputFormat=application/json&maxFeatures=3&bbox=${samplePoint.lat - d},${samplePoint.lng - d},${samplePoint.lat + d},${samplePoint.lng + d}`;
+    // vw_snv_rod's schema turned out to be federal-only-looking fields
+    // (Codigo_BR, Superficie_Federal...), but the one sample point tried
+    // before landed right on BR-174 itself -- the same data the INDE
+    // federal layer already has. Testing every corridor sample point
+    // (not just one) covers the detour loop too, so if there's a genuinely
+    // separate state-road record somewhere along it, this should surface
+    // it; if every hit still comes back as Codigo_BR-only federal data,
+    // that's a real answer too (this view doesn't have state highways on
+    // their own after all).
+    if (samplePoints && samplePoints.length && allNames.includes('vgeo:vw_snv_rod')) {
+      const d = 0.05; // ~5km box per sample point
+      const seen = new Map(); // Codigo_SNV -> properties, so the same segment hit from two nearby samples only logs once
+      for (const p of samplePoints) {
+        const bboxUrl = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetFeature&typeName=vgeo:vw_snv_rod&outputFormat=application/json&maxFeatures=10&bbox=${p.lng - d},${p.lat - d},${p.lng + d},${p.lat + d}`;
+        const sample = await _fetchJsonResilient(bboxUrl, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
+        if (sample && Array.isArray(sample.features)) {
+          sample.features.forEach(f => {
+            const key = (f.properties && f.properties.Codigo_SNV) || JSON.stringify(f.properties);
+            if (!seen.has(key)) seen.set(key, f.properties);
+          });
+        }
+      }
+      if (seen.size) {
+        console.log(`[DNIT/VGEO] vw_snv_rod -- ${seen.size} trecho(s) distinto(s) encontrado(s) ao longo da rota (incluindo o desvio):`);
+        let i = 0;
+        seen.forEach(props => { i++; console.log(`[DNIT/VGEO]   trecho ${i}: ${JSON.stringify(props)}`); });
+      } else {
+        console.warn('[DNIT/VGEO] vw_snv_rod: nenhum trecho encontrado perto de nenhum dos pontos testados (rota + desvio) -- tentando eixo de coordenada invertido em um ponto');
+        const p0 = samplePoints[0];
+        const bboxUrlSwapped = `${DNIT_OWN_GEOSERVER_URL}?service=WFS&version=${version}&request=GetFeature&typeName=vgeo:vw_snv_rod&outputFormat=application/json&maxFeatures=3&bbox=${p0.lat - d},${p0.lng - d},${p0.lat + d},${p0.lng + d}`;
         const sample2 = await _fetchJsonResilient(bboxUrlSwapped, { timeoutMs: INDE_DNIT_TIMEOUT_MS, retries: 0 });
         if (sample2 && Array.isArray(sample2.features) && sample2.features.length) {
           console.log('[DNIT/VGEO] vw_snv_rod (eixo invertido) -- campos de uma feição de exemplo: ' + JSON.stringify(sample2.features[0].properties));
         } else {
-          console.warn('[DNIT/VGEO] vw_snv_rod: nenhuma feição em nenhuma ordem de eixo testada nesse bbox');
+          console.warn('[DNIT/VGEO] vw_snv_rod: nenhuma feição em nenhuma ordem de eixo testada');
         }
-      } else {
-        console.warn('[DNIT/VGEO] vw_snv_rod: consulta de amostra falhou (sem resposta)');
       }
     }
     return; // GetCapabilities found and logged -- no need to try the other version too
@@ -2125,9 +2139,11 @@ window.exportRoutesImage = async function() {
     // Diagnostic-only, fire-and-forget: doesn't affect the image, just
     // logs what's on DNIT's own GeoServer (see _probeDnitOwnGeoserver)
     // so the real state-highway layer -- if there is one there -- can be
-    // identified from the console next time this runs.
-    const _probeSamplePoint = LD_INICIO_POINTS[0] || routePts[0];
-    _probeDnitOwnGeoserver(_probeSamplePoint).catch(err => console.warn('[DNIT/VGEO] probe falhou:', err));
+    // identified from the console next time this runs. Uses every
+    // corridor sample point (route + detour), not just one, so a
+    // state-only segment somewhere along a detour loop isn't missed.
+    const _probeSamplePoints = _sampleRoutePoints(routePts, ROUTE_IMAGE_CORRIDOR_SAMPLES);
+    _probeDnitOwnGeoserver(_probeSamplePoints).catch(err => console.warn('[DNIT/VGEO] probe falhou:', err));
 
     // Center the live map on the routes first -- same fitBounds a person
     // would do by hand -- then use exactly that resulting view as the

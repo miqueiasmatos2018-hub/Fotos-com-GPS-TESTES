@@ -1293,8 +1293,9 @@ function _mercatorXToLng(x) {
 // mirror that may not even be reachable.
 const OVERPASS_BBOX_TIMEOUT_MS = 7000;
 const ROUTE_IMAGE_CORRIDOR_SAMPLES = 8; // how many points along the route get their own around: clause
-const ROUTE_IMAGE_CITY_RADIUS_M = 15000; // cities are sparser and often sit a bit off the highway itself
-const ROUTE_IMAGE_CITY_MAX_LABELS = 8;         // caps how many city labels a wide frame can end up with
+const ROUTE_IMAGE_CITY_RADIUS_M = 30000; // cities are sparser and often sit a bit off the highway itself
+const ROUTE_IMAGE_CITY_MAX_LABELS = 16;         // caps how many city labels a wide frame can end up with
+const ROUTE_IMAGE_CITY_SAMPLES = 40; // higher-resolution than ROUTE_IMAGE_CORRIDOR_SAMPLES since the local IBGE lookup is free (no network round trip per sample) -- more samples means fewer gaps along a long route where a nearby município could otherwise be missed
 
 // Evenly-spaced subset of a route's coordinate list, so a corridor query
 // stays a fixed, small size no matter how many points the OSRM polyline
@@ -1912,7 +1913,7 @@ window.exportRoutesImage = async function() {
     // lookup nor the merge produces anything, THAT'S the one real "city
     // lookup failed" case worth telling the person about.
     const citiesLocal = (typeof _municipiosBrNear === 'function')
-      ? _municipiosBrNear(_sampleRoutePoints(routePts, ROUTE_IMAGE_CORRIDOR_SAMPLES), ROUTE_IMAGE_CITY_RADIUS_M / 1000)
+      ? _municipiosBrNear(_sampleRoutePoints(routePts, ROUTE_IMAGE_CITY_SAMPLES), ROUTE_IMAGE_CITY_RADIUS_M / 1000)
       : [];
     const citiesForImage = _pickCitiesForImage(
       citiesLocal.map(_normalizeCityEntry).concat(citiesRaw.map(_normalizeCityEntry)).filter(Boolean)

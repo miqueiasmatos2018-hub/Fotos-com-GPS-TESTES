@@ -1578,12 +1578,44 @@ function _drawPinMarker(ctx, x, y, colorHex) {
   ctx.restore();
 }
 
-function _drawRouteImageLabel(ctx, x, y, text) {
+// Shared overlap-avoidance for every text label drawn on the exported
+// image (LD_INICIO, city names, highway shields): a running list of
+// already-placed label boxes. A new label whose box would overlap one
+// already placed gets nudged in ever-wider rings until it lands clear (or,
+// failing that after a bounded number of tries, just placed where asked --
+// better than an infinite loop on a very crowded frame). Returns the
+// {x, y} to actually draw at.
+function _reserveLabelBox(registry, x, y, w, h) {
+  const overlaps = (bx, by) => registry.some(b =>
+    bx < b.x + b.w && bx + w > b.x && by < b.y + b.h && by + h > b.y
+  );
+  if (!overlaps(x, y)) { registry.push({ x, y, w, h }); return { x, y }; }
+  const step = h + 6;
+  for (let ring = 1; ring <= 10; ring++) {
+    const candidates = [
+      { x, y: y + step * ring }, { x, y: y - step * ring },
+      { x: x + step * ring, y }, { x: x - step * ring, y },
+      { x: x + step * ring, y: y + step * ring }, { x: x - step * ring, y: y + step * ring },
+      { x: x + step * ring, y: y - step * ring }, { x: x - step * ring, y: y - step * ring }
+    ];
+    for (const c of candidates) {
+      if (!overlaps(c.x, c.y)) { registry.push({ x: c.x, y: c.y, w, h }); return c; }
+    }
+  }
+  registry.push({ x, y, w, h });
+  return { x, y };
+}
+
+function _drawRouteImageLabel(ctx, x, y, text, registry) {
   const s = ROUTE_IMAGE_UI_SCALE;
   const fontSize = 13 * s, padX = 6 * s, padY = 3 * s;
   ctx.font = `${fontSize}px sans-serif`;
   const w = ctx.measureText(text).width + padX * 2;
   const h = fontSize + padY * 2;
+  if (registry) {
+    const pos = _reserveLabelBox(registry, x, y - h / 2, w, h);
+    x = pos.x; y = pos.y + h / 2;
+  }
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   _drawRoundedRect(ctx, x, y - h / 2, w, h, 3 * s);
   ctx.fill();
@@ -1596,8 +1628,10 @@ function _drawRouteImageLabel(ctx, x, y, text) {
 // Small white dot + name pill for a city/town that falls inside the
 // exported frame (see _fetchCitiesInBBox / _pickCitiesForImage above) --
 // visually distinct from the route pins and road shields so it reads as
-// "place on the map", not another stop or highway marker.
-function _drawCityMarker(ctx, x, y, name) {
+// "place on the map", not another stop or highway marker. The dot always
+// stays exactly on the city's real coordinate; only the text pill nudges
+// if it would overlap another label already placed.
+function _drawCityMarker(ctx, x, y, name, registry) {
   const s = ROUTE_IMAGE_UI_SCALE;
   ctx.save();
   ctx.beginPath();
@@ -1613,7 +1647,11 @@ function _drawCityMarker(ctx, x, y, name) {
   ctx.font = `600 ${fontSize}px sans-serif`;
   const w = ctx.measureText(name).width + padX * 2;
   const h = fontSize + padY * 2;
-  const lx = x + 7 * s, ly = y;
+  let lx = x + 7 * s, ly = y;
+  if (registry) {
+    const pos = _reserveLabelBox(registry, lx, ly - h / 2, w, h);
+    lx = pos.x; ly = pos.y + h / 2;
+  }
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   _drawRoundedRect(ctx, lx, ly - h / 2, w, h, 3 * s);
   ctx.fill();
@@ -1627,13 +1665,18 @@ function _drawCityMarker(ctx, x, y, name) {
 // (scaled only by ROUTE_IMAGE_UI_SCALE, never by real-world distance), so
 // it stays exactly as legible whether the frame covers 30km or 300km.
 // Centered on (x, y), matching where a road-name pill sits on the road
-// itself in the reference export.
-function _drawRoadRefLabel(ctx, x, y, text) {
+// itself in the reference export -- nudged off-center if it would overlap
+// another label already placed.
+function _drawRoadRefLabel(ctx, x, y, text, registry) {
   const s = ROUTE_IMAGE_UI_SCALE;
   const fontSize = 15 * s, padX = 7 * s, padY = 4 * s;
   ctx.font = `bold ${fontSize}px sans-serif`;
   const w = ctx.measureText(text).width + padX * 2;
   const h = fontSize + padY * 2;
+  if (registry) {
+    const pos = _reserveLabelBox(registry, x - w / 2, y - h / 2, w, h);
+    x = pos.x + w / 2; y = pos.y + h / 2;
+  }
   ctx.fillStyle = 'rgba(255,255,255,0.94)';
   _drawRoundedRect(ctx, x - w / 2, y - h / 2, w, h, 3 * s);
   ctx.fill();
@@ -1966,6 +2009,13 @@ window.exportRoutesImage = async function() {
     // line would defeat the point of showing it at all.
     if (placesImg) ctx.drawImage(placesImg, 0, 0, ROUTE_IMAGE_WIDTH, ROUTE_IMAGE_HEIGHT);
 
+    // Shared list of already-placed label boxes so highway shields, the
+    // LD_INICIO tag, and city names don't render stacked on top of each
+    // other when two of them would otherwise land in the same spot -- see
+    // _reserveLabelBox. Order matters a little: whichever draws first gets
+    // to keep its spot, later ones nudge around it.
+    const labelRegistry = [];
+
     // Highway shields (BR-174, RR-342, RR-203...) drawn AFTER the route
     // lines, directly at the coordinates where the route itself changes
     // road -- see _highwaySegmentsWithLocations. Deduped by proximity so
@@ -1980,7 +2030,7 @@ window.exportRoutesImage = async function() {
         const tooClose = placed.some(([qx, qy]) => Math.hypot(px - qx, py - qy) < ROAD_LABEL_MIN_SPACING_PX * s);
         if (tooClose) return;
         placed.push([px, py]);
-        _drawRoadRefLabel(ctx, px, py, seg.code);
+        _drawRoadRefLabel(ctx, px, py, seg.code, labelRegistry);
       });
     })();
 
@@ -1997,12 +2047,12 @@ window.exportRoutesImage = async function() {
       _drawPinMarker(ctx, px, py, LD_INICIO_COLOR);
       // O deslocamento do rótulo era em pixels fixos, então em outros
       // tamanhos de saída ele descolava do alfinete.
-      _drawRouteImageLabel(ctx, px + 14 * ROUTE_IMAGE_UI_SCALE, py - 11 * ROUTE_IMAGE_UI_SCALE, 'LD_INICIO_OAE');
+      _drawRouteImageLabel(ctx, px + 14 * ROUTE_IMAGE_UI_SCALE, py - 11 * ROUTE_IMAGE_UI_SCALE, 'LD_INICIO_OAE', labelRegistry);
     });
 
     citiesForImage.forEach(c => {
       const [px, py] = project(c.lat, c.lon);
-      _drawCityMarker(ctx, px, py, c.uf ? `${c.name} - ${c.uf}` : c.name);
+      _drawCityMarker(ctx, px, py, c.uf ? `${c.name} - ${c.uf}` : c.name, labelRegistry);
     });
 
     const code = (ROUTES.a.nameMiddle || ROUTES.b.nameMiddle || '').trim();

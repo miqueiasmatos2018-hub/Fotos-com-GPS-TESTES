@@ -1972,9 +1972,10 @@ window.exportRoutesImage = async function() {
     // shields on top of each other.
     (function drawRouteHighwayShields() {
       const s = ROUTE_IMAGE_UI_SCALE;
-      const placed = [];
+      const placedByCode = {}; // code -> [px,py] already placed for THAT code -- different highways must never suppress each other, even at the same junction
       roadSegments.forEach(seg => {
         const [px, py] = project(seg.lat, seg.lng);
+        const placed = placedByCode[seg.code] || (placedByCode[seg.code] = []);
         const tooClose = placed.some(([qx, qy]) => Math.hypot(px - qx, py - qy) < ROAD_LABEL_MIN_SPACING_PX * s);
         if (tooClose) return;
         placed.push([px, py]);
